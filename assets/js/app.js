@@ -298,7 +298,7 @@
         }
         const [head, ...body] = rows;
         out.push(
-          `<div class="tablewrap"><table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${body
+          `<div class="tablewrap"><table style="--cols:${head.length}"><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${body
             .map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`)
             .join('')}</tbody></table></div>`
         );
