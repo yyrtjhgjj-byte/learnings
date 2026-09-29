@@ -21,7 +21,8 @@
 
 ## 開き方
 
-- **GitHub Pages（おすすめ）**: リポジトリの Settings → Pages → Source を「Deploy from a branch」、Branch を `main` / `(root)` にして保存。数分後に `https://<ユーザー名>.github.io/learnings/` で開けます。スマホの「ホーム画面に追加」でアプリのように使え、一度開けばオフラインでも読めます。
+- **公開版**: https://yyrtjhgjj-byte.github.io/learnings/
+  `main` に push すると GitHub Actions（`.github/workflows/pages.yml`）がコンテンツを検証してから GitHub Pages に公開します（Settings → Pages → Source は「GitHub Actions」）。スマホの「ホーム画面に追加」でアプリのように使え、一度開けばオフラインでも読めます。1 ファイル版は https://yyrtjhgjj-byte.github.io/learnings/otona-shakai.html 。
 - **手元で開く**: `index.html` をブラウザで開くだけでも動きます（オフライン機能は無効）。
 - **1 ファイル版**: `node tools/build.mjs` で `dist/otona-shakai.html` ができます。CSS・JS・データを全部埋め込んだ単体の HTML なので、この 1 ファイルだけ持ち運べます。
 
