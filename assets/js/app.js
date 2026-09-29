@@ -211,6 +211,18 @@
     '?>': ['trivia', '豆知識', 'trivia'],
     'n>': ['news', 'ニュースで見るとき', 'news']
   };
+  /* 「|」で区切る。ただし {漢字|よみ} の中の「|」は区切りにしない */
+  function splitBar(str) {
+    const out = [''];
+    let depth = 0;
+    for (const ch of str) {
+      if (ch === '{') depth++;
+      else if (ch === '}') depth = Math.max(0, depth - 1);
+      if (ch === '|' && depth === 0) out.push('');
+      else out[out.length - 1] += ch;
+    }
+    return out;
+  }
   function renderMarkup(src) {
     const lines = String(src || '').replace(/\r/g, '').split('\n').map((l) => l.trim());
     const out = [];
@@ -239,11 +251,11 @@
       if (blk) {
         const [name, arg] = [blk[1], blk[2]];
         if (name === 'fig') {
-          const [id, cap] = arg.split('|');
+          const [id, cap] = splitBar(arg);
           const svg = L.diagrams[id];
           if (svg) out.push(`<figure class="figure">${svg}${cap ? `<figcaption>${inline(cap)}</figcaption>` : ''}</figure>`);
         } else if (name === 'steps') {
-          const items = arg.split('|');
+          const items = splitBar(arg);
           out.push(
             `<div class="steps">${items.map((s, k) => `<div class="step"><b>STEP ${k + 1}</b>${inline(s)}</div>`).join('')}</div>`
           );
@@ -282,7 +294,7 @@
         while (i < lines.length && lines[i].startsWith('|')) {
           const l = lines[i++];
           if (/^\|[\s\-:|]+\|$/.test(l)) continue;
-          rows.push(l.replace(/^\||\|$/g, '').split('|').map((c) => c.trim()));
+          rows.push(splitBar(l.replace(/^\||\|$/g, '')).map((c) => c.trim()));
         }
         const [head, ...body] = rows;
         out.push(
@@ -775,7 +787,7 @@
       <span class="unit-status">${S.read[u.key] ? '<span class="pill ok">読了</span>' : ''}${
         a.n ? `<span class="pill${a.c === a.n ? ' ok' : ''} num">${a.c}/${u.qItems.length}</span>` : ''
       }</span>
-      <span class="unit-lead">${esc(u.lead)}</span>
+      <span class="unit-lead">${esc(plain(u.lead))}</span>
     </a>`;
   }
 
