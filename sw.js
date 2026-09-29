@@ -3,7 +3,7 @@
  * 自分のファイルは「キャッシュを先に返し、裏で最新を取りに行く」。
  * コンテンツを大きく変えたら VERSION を上げると古いキャッシュが消える。
  */
-const VERSION = 'v6';
+const VERSION = 'v7';
 const CACHE = 'otona-shakai-' + VERSION;
 const FONT_CACHE = 'otona-shakai-fonts';
 
@@ -40,6 +40,8 @@ const PRECACHE = [
   'data/manners.js',
   'data/ceremony.js',
   'data/living.js',
+  'data/trivia-physics.js',
+  'data/trivia-life.js',
   'data/trivia-culture.js',
   'data/timeline.js',
   'data/timeline-science.js',
