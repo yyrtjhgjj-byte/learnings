@@ -18,9 +18,14 @@ const OUTLINE = {
   economics: ['basics', 'market', 'firms', 'gdp', 'money', 'fiscal', 'postwar', 'labor', 'welfare', 'trade', 'global-economy', 'north-south', 'consumer'],
   ethics: ['adolescence', 'greek', 'judaism-christianity', 'islam', 'buddhism', 'china', 'japan-thought', 'modern-west', 'kant-hegel', 'utilitarianism', 'existentialism', 'modern-issues'],
   geography: ['maps', 'landforms', 'climate', 'agriculture', 'resources', 'industry', 'population', 'culture', 'asia', 'europe-russia', 'africa', 'americas', 'oceania', 'japan'],
-  history: ['ancient-civilizations', 'greece-rome', 'china-dynasties', 'islamic-world', 'medieval-europe', 'renaissance', 'absolutism', 'revolutions', 'industrial', 'imperialism', 'ww1', 'interwar', 'ww2', 'cold-war', 'contemporary']
+  history: ['ancient-civilizations', 'greece-rome', 'china-dynasties', 'islamic-world', 'medieval-europe', 'renaissance', 'absolutism', 'revolutions', 'industrial', 'imperialism', 'ww1', 'interwar', 'ww2', 'cold-war', 'contemporary'],
+  physics: ['motion', 'forces', 'gravity', 'energy', 'momentum', 'heat', 'waves', 'sound', 'light', 'electricity', 'magnetism', 'em-waves', 'nuclear'],
+  chemistry: ['matter', 'states', 'atoms', 'bonds', 'mole', 'acids-bases', 'redox', 'batteries', 'inorganic', 'organic', 'polymers', 'daily-chemistry', 'environment'],
+  biology: ['cells', 'metabolism', 'dna', 'cell-division', 'heredity', 'homeostasis', 'immunity', 'nervous', 'biotech', 'evolution', 'diversity', 'vegetation', 'ecosystems'],
+  earth: ['earth-shape', 'plates', 'earthquakes', 'volcanoes', 'strata', 'earth-history', 'atmosphere', 'weather', 'ocean', 'climate-change', 'solar-system', 'stars', 'disasters']
 };
-const FIGS = ['sanken', 'supply-demand', 'business-cycle', 'circular-flow', 'maslow', 'dialectic', 'pop-pyramid', 'river-landforms', 'pressure-belts'];
+const FIGS = ['sanken', 'supply-demand', 'business-cycle', 'circular-flow', 'maslow', 'dialectic', 'pop-pyramid', 'river-landforms', 'pressure-belts',
+  'atom', 'states', 'wave', 'cell', 'earth-interior', 'eco-pyramid'];
 const SIDS = Object.keys(OUTLINE);
 const EVENT_S = SIDS.concat('japan');
 

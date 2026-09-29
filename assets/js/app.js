@@ -8,7 +8,14 @@
 
   const L = window.LEARN;
   const META = L.meta;
-  const SUBJECTS = L.order.filter((id) => Array.isArray(L.subjects[id]));
+  const ALL_SUBJECTS = L.order.filter((id) => Array.isArray(L.subjects[id]));
+  const COURSES = L.courses || { social: { name: '社会', brand: 'おとなの社会科', sub: '高校社会の基礎', list: '' } };
+  const courseOf = (sid) => (META[sid] && META[sid].course) || 'social';
+  const hasCourse = (c) => ALL_SUBJECTS.some((id) => courseOf(id) === c);
+  /* いまのコース（社会／理科）の科目。理科がまだ無ければ社会 */
+  const curCourse = () => (hasCourse(S.course) ? S.course : 'social');
+  const SUBJ = () => ALL_SUBJECTS.filter((id) => courseOf(id) === curCourse());
+  const inCourse = (sid) => courseOf(sid) === curCourse();
   const sname = (id) => (META[id] ? META[id].name : id === 'japan' ? '日本' : id);
 
   /* =========================================================
@@ -81,7 +88,7 @@
      保存データ（localStorage。使えない環境でも落ちない）
      ========================================================= */
   const STORE_KEY = 'otona-shakai:v1';
-  const DEFAULTS = () => ({ read: {}, q: {}, cards: {}, days: [], last: null, sheet: false, theme: 'system', size: 'm', reverse: false });
+  const DEFAULTS = () => ({ read: {}, q: {}, cards: {}, days: [], last: null, sheet: false, theme: 'system', size: 'm', reverse: false, course: 'social' });
   let S = DEFAULTS();
 
   function load() {
@@ -131,7 +138,7 @@
   const QS = [];
   const QMAP = {};
 
-  SUBJECTS.forEach((sid) => {
+  ALL_SUBJECTS.forEach((sid) => {
     TERMS_BY_SID[sid] = [];
     const seen = new Set();
     L.subjects[sid].forEach((u, i) => {
@@ -395,25 +402,48 @@
   const NAV_GROUP = { quiz: 'practice', cards: 'practice', order: 'practice', record: 'practice', digest: 'learn' };
 
   function buildChrome() {
+    const C = COURSES[curCourse()];
+    const sw = hasCourse('science')
+      ? `<div class="course" role="group" aria-label="社会と理科の切り替え">${Object.keys(COURSES)
+          .filter(hasCourse)
+          .map((c) => `<button type="button" data-course="${c}" aria-pressed="${c === curCourse()}">${COURSES[c].name}</button>`)
+          .join('')}</div>`
+      : '';
     document.getElementById('topbar').innerHTML = `
-      <a class="brand" href="#home"><span class="brand-mark">おとなの社会科</span><span class="brand-sub">高校社会の基礎</span></a>
+      <a class="brand" href="#home"><span class="brand-mark">${C.brand}</span><span class="brand-sub">${C.sub}</span></a>
+      ${sw}
       <a class="iconbtn" href="#search" aria-label="検索">${icon('search')}</a>
       <a class="iconbtn settings-btn" href="#settings" aria-label="設定">${icon('settings')}</a>`;
     document.getElementById('tabbar').innerHTML = NAV.map(
       (n) => `<a class="tab" href="#${n.r}" data-r="${n.r}">${icon(n.ic)}<span>${n.label}</span></a>`
     ).join('');
     document.getElementById('rail').innerHTML = `
-      <a class="brand" href="#home"><span class="brand-mark">おとなの社会科</span><span class="brand-sub">高校社会の基礎</span></a>
+      <a class="brand" href="#home"><span class="brand-mark">${C.brand}</span><span class="brand-sub">${C.sub}</span></a>
+      ${sw}
       ${NAV.map((n) => `<a class="rail-link" href="#${n.r}" data-r="${n.r}">${icon(n.ic)}<span>${n.label}</span></a>`).join('')}
       <a class="rail-link" href="#search" data-r="search">${icon('search')}<span>検索</span></a>
       <div class="rail-sep"></div>
-      ${SUBJECTS.map(
+      ${SUBJ().map(
         (sid) =>
           `<a class="rail-subject" href="#learn.${sid}" data-s="${sid}"><span class="idx">${META[sid].tag}</span>${META[sid].name}</a>`
       ).join('')}
       <div class="rail-sep"></div>
       <a class="rail-link" href="#settings" data-r="settings">${icon('settings')}<span>設定</span></a>
       <div class="rail-foot">全${UNITS.length}講・用語${TERMS.length}語・人物${L.people.length}人</div>`;
+    document.querySelectorAll('[data-course]').forEach((b) =>
+      b.addEventListener('click', () => {
+        if (b.dataset.course === curCourse()) return;
+        S.course = b.dataset.course;
+        save();
+        quizPrefs.sids = [];
+        cardPrefs.sids = [];
+        dictPrefs.sid = '';
+        buildChrome();
+        const r = location.hash.replace(/^#/, '').split('.')[0];
+        if (['learn', 'digest', 'quiz', 'cards'].includes(r) && location.hash.split('.').length > 1) location.hash = '#' + (r === 'digest' ? 'digest' : r === 'learn' ? 'learn' : r);
+        else route();
+      })
+    );
   }
   function setNav(r) {
     const g = NAV_GROUP[r] || r;
@@ -480,6 +510,15 @@
     const [r = 'home', a, b] = parts;
     keyHandler = null;
     setSheetAvailable(false);
+    /* 別コースの科目・講を開いたら、コースもそちらに合わせる */
+    if (['learn', 'quiz', 'cards', 'digest'].includes(r) && a && META[a] && ALL_SUBJECTS.includes(a) && courseOf(a) !== curCourse()) {
+      S.course = courseOf(a);
+      save();
+      quizPrefs.sids = [];
+      cardPrefs.sids = [];
+      dictPrefs.sid = '';
+      buildChrome();
+    }
     let title = '';
     switch (r) {
       case 'learn':
@@ -521,7 +560,8 @@
         title = viewHome();
     }
     setNav(r);
-    document.title = title ? `${title} | おとなの社会科` : 'おとなの社会科';
+    const brand = COURSES[curCourse()].brand;
+    document.title = title ? `${title} | ${brand}` : brand;
     window.scrollTo(0, 0);
   }
   window.addEventListener('hashchange', route);
@@ -608,7 +648,7 @@
   }
 
   function subjectChips(selected, { all = true, multi = true, name = 'sub' } = {}) {
-    const items = SUBJECTS.map(
+    const items = SUBJ().map(
       (sid) =>
         `<button type="button" class="chip" data-s="${sid}" data-v="${sid}" aria-pressed="${selected.includes(sid)}"><span class="dot"></span>${META[sid].name}</button>`
     );
@@ -666,34 +706,38 @@
   function viewHome() {
     const now = new Date();
     const wd = '日月火水木金土'[now.getDay()];
-    const total = UNITS.length;
-    const done = UNITS.filter((u) => S.read[u.key]).length;
-    const acc = accuracyOf();
+    const CU = UNITS.filter((u) => inCourse(u.sid));
+    const C = COURSES[curCourse()];
+    const total = CU.length;
+    const done = CU.filter((u) => S.read[u.key]).length;
+    const acc = accuracyOf((id) => inCourse(sidOfQ(id)));
     /* 続きから：最後に開いた講。読了済みなら同じ科目の次の講、まだ何も開いていなければ最初の講 */
-    let last = S.last && UNIT[S.last];
+    let last = S.last && UNIT[S.last] && inCourse(UNIT[S.last].sid) ? UNIT[S.last] : null;
     let lastLabel = '続きから';
     if (last && S.read[last.key]) {
-      const nx = unitsOf(last.sid)[last.no] || UNITS.find((u) => !S.read[u.key]);
+      const nx = unitsOf(last.sid)[last.no] || CU.find((u) => !S.read[u.key]);
       if (nx) {
         last = nx;
         lastLabel = '次に読む';
       }
-    } else if (!last && UNITS.length) {
-      last = UNITS[0];
+    } else if (!last && CU.length) {
+      last = CU[0];
       lastLabel = 'まずはここから';
     }
     const r = rng(hash(dayKey()));
-    const dq = QS[Math.floor(r() * QS.length)];
-    const person = L.people.length ? L.people[Math.floor(r() * L.people.length)] : null;
-    const due = dueKeys().length;
-    const weak = weakIds().length;
+    const CQ = QS.filter((q) => inCourse(q.sid));
+    const CP = L.people.filter((p) => inCourse(p.s));
+    const dq = CQ[Math.floor(r() * CQ.length)];
+    const person = CP.length ? CP[Math.floor(r() * CP.length)] : null;
+    const due = dueKeys((k) => inCourse(cardSid(k))).length;
+    const weak = weakIds(SUBJ()).length;
     const st = streak();
 
     view.innerHTML = `<div class="page">
       <section class="hero">
         <p class="hero-date num">${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日（${wd}）</p>
-        <h1 class="hero-title">知っておくべき<br><span class="k">社会</span>を、ひととおり。</h1>
-        <p class="hero-lead">政治・経済・倫理・地理・世界史。高校で習うはずの基礎を全${total}講にまとめたノートです。オレンジの語句は、赤シートで隠して覚えられます。</p>
+        <h1 class="hero-title">知っておくべき<br><span class="k">${C.name}</span>を、ひととおり。</h1>
+        <p class="hero-lead">${C.list}。高校で習うはずの基礎を全${total}講にまとめたノートです。オレンジの語句は、赤シートで隠して覚えられます。</p>
         <div class="stats">
           <div class="stat"><b>${st}<small>日</small></b><span>連続学習</span></div>
           <div class="stat"><b>${done}<small>/${total}</small></b><span>読了した講</span></div>
@@ -721,7 +765,7 @@
 
       <section class="section">
         <div class="section-head"><h2 class="section-title">科目</h2><a class="section-link" href="#learn">全講の目次 →</a></div>
-        <div class="tiles">${SUBJECTS.map(tileHTML).join('')}</div>
+        <div class="tiles">${SUBJ().map(tileHTML).join('')}</div>
       </section>
 
       <section class="section">
@@ -761,15 +805,15 @@
       <header class="lesson-head">
         <p class="eyebrow">CONTENTS</p>
         <h1 class="lesson-title">学ぶ</h1>
-        <p class="lesson-lead">5 科目・全${UNITS.length}講。どこから読んでも大丈夫なように、1 講ずつ完結させています。</p>
+        <p class="lesson-lead">${SUBJ().length} 科目・全${UNITS.filter((u) => inCourse(u.sid)).length}講。どこから読んでも大丈夫なように、1 講ずつ完結させています。</p>
       </header>
-      <div class="tiles">${SUBJECTS.map(tileHTML).join('')}</div>
+      <div class="tiles">${SUBJ().map(tileHTML).join('')}</div>
       <a class="card continue" href="#digest">
         <span class="mode-icon">${icon('point')}</span>
-        <span class="continue-body"><span class="continue-title">要点総ざらい</span><span class="continue-sub">全${UNITS.length}講の「要点 3 つ」だけを一気に読む。赤シート対応</span></span>
+        <span class="continue-body"><span class="continue-title">要点総ざらい</span><span class="continue-sub">全${UNITS.filter((u) => inCourse(u.sid)).length}講の「要点 3 つ」だけを一気に読む。赤シート対応</span></span>
         ${icon('chevron')}
       </a>
-      ${SUBJECTS.map(
+      ${SUBJ().map(
         (sid) => `<section class="section" data-s="${sid}">
           <div class="section-head"><h2 class="section-title"><span class="idx">${META[sid].tag}</span>${META[sid].name}</h2><a class="section-link" href="#learn.${sid}">科目ページ →</a></div>
           <div class="units">${unitsOf(sid).map(unitRowHTML).join('')}</div>
@@ -943,7 +987,7 @@
     </div>`;
     const body = view.querySelector('#digestBody');
     function draw(filter) {
-      body.innerHTML = SUBJECTS.filter((x) => !filter || x === filter)
+      body.innerHTML = SUBJ().filter((x) => !filter || x === filter)
         .map(
           (x) => `<section class="section" data-s="${x}">
           <h2 class="section-title"><span class="idx">${META[x].tag}</span>${META[x].name}</h2>
@@ -969,10 +1013,12 @@
      演習ハブ
      ========================================================= */
   function viewPractice() {
-    const due = dueKeys().length;
-    const weak = weakIds().length;
-    const acc = accuracyOf();
-    const qTotal = QS.length + TERMS.length;
+    const due = dueKeys((k) => inCourse(cardSid(k))).length;
+    const weak = weakIds(SUBJ()).length;
+    const acc = accuracyOf((id) => inCourse(sidOfQ(id)));
+    const cTerms = TERMS.filter((t) => inCourse(t.sid)).length;
+    const cPeople = L.people.filter((p) => inCourse(p.s)).length;
+    const qTotal = QS.filter((q) => inCourse(q.sid)).length + cTerms;
     view.innerHTML = `<div class="page">
       <header class="lesson-head">
         <p class="eyebrow">PRACTICE</p>
@@ -990,13 +1036,13 @@
           <span class="mode-icon">${icon('cards')}</span>
           <h3>暗記カード</h3>
           <p>用語をめくって「覚えた／まだ」。覚えたカードは 1日後、3日後、1週間後…と間隔をあけて出てきます。</p>
-          <span class="mode-foot num">${TERMS.length}枚${due ? `・今日の復習 ${due}枚` : ''}</span>
+          <span class="mode-foot num">${cTerms}枚${due ? `・今日の復習 ${due}枚` : ''}</span>
         </a>
         <a class="card mode" href="#cards.people">
           <span class="mode-icon">${icon('people')}</span>
           <h3>人物カード</h3>
           <p>ソクラテス、ロック、ケインズ、ナポレオン…名前を見て、何をした人か言えるか。</p>
-          <span class="mode-foot num">${L.people.length}人</span>
+          <span class="mode-foot num">${cPeople}人</span>
         </a>
         <a class="card mode" href="#order">
           <span class="mode-icon">${icon('order')}</span>
@@ -1024,7 +1070,7 @@
 
   function viewQuiz(a, b) {
     if (a === 'weak') {
-      const ids = weakIds().slice(0, 20);
+      const ids = weakIds(SUBJ()).slice(0, 20);
       if (!ids.length) {
         toast('間違えた問題はありません');
         return viewQuizSetup();
@@ -1041,7 +1087,7 @@
   }
 
   function buildQuizPool() {
-    const sids = quizPrefs.sids.length ? quizPrefs.sids : SUBJECTS;
+    const sids = quizPrefs.sids.length ? quizPrefs.sids : SUBJ();
     let pool = [];
     if (quizPrefs.src !== 'term') pool = pool.concat(QS.filter((q) => sids.includes(q.sid)));
     if (quizPrefs.src !== 'unit') pool = pool.concat(TERMS.filter((t) => sids.includes(t.sid)).map((t) => ({ lazyTerm: t, id: 'k:' + t.key, sid: t.sid })));
@@ -1191,7 +1237,7 @@
   const cardPrefs = { sids: [], order: 'due', n: 20 };
 
   function cardDeck(kind) {
-    const sids = cardPrefs.sids.length ? cardPrefs.sids : SUBJECTS;
+    const sids = cardPrefs.sids.length ? cardPrefs.sids : SUBJ();
     let items;
     if (kind === 'people') {
       items = L.people.filter((p) => sids.includes(p.s)).map((p) => ({ key: 'p:' + p.n, sid: p.s, person: p }));
@@ -1455,7 +1501,7 @@
      学習記録
      ========================================================= */
   function viewRecord() {
-    const rows = SUBJECTS.map((sid) => {
+    const rows = SUBJ().map((sid) => {
       const us = unitsOf(sid);
       const done = us.filter((u) => S.read[u.key]).length;
       const acc = accuracyOf((id) => sidOfQ(id) === sid);
@@ -1527,7 +1573,7 @@
   const tlPrefs = { cats: [], q: '' };
 
   function viewTimeline() {
-    const cats = SUBJECTS.filter((sid) => L.timeline.some((e) => e.s === sid)).concat(L.timeline.some((e) => e.s === 'japan') ? ['japan'] : []);
+    const cats = ALL_SUBJECTS.filter((sid) => L.timeline.some((e) => e.s === sid)).concat(L.timeline.some((e) => e.s === 'japan') ? ['japan'] : []);
     const events = L.timeline.slice().sort((a, b) => a.y - b.y || (a.o || 0) - (b.o || 0));
     view.innerHTML = `<div class="page">
       <header class="lesson-head">
@@ -1604,7 +1650,7 @@
         <h1 class="lesson-title">辞典</h1>
       </header>
       <div class="tl-controls">
-        ${segHTML('tab', [['terms', `用語 ${TERMS.length}`], ['people', `人物 ${L.people.length}`]], tab)}
+        ${segHTML('tab', [['terms', `用語 ${TERMS.filter((t) => inCourse(t.sid)).length}`], ['people', `人物 ${L.people.filter((p) => inCourse(p.s)).length}`]], tab)}
         <label class="field">${icon('search')}<input id="dictSearch" type="search" placeholder="${tab === 'people' ? '人名・キーワードで絞り込む' : '用語・説明文で絞り込む'}" value="${esc(dictPrefs.q)}" autocomplete="off"></label>
         ${subjectChips(dictPrefs.sid ? [dictPrefs.sid] : [], { multi: false, name: 'dsub' })}
       </div>
@@ -1614,11 +1660,11 @@
     function draw() {
       const q = norm(dictPrefs.q);
       if (tab === 'people') {
-        const list = L.people.filter((p) => (!dictPrefs.sid || p.s === dictPrefs.sid) && (!q || norm([p.n, p.k, p.d, p.w].join(' ')).includes(q)));
+        const list = L.people.filter((p) => (dictPrefs.sid ? p.s === dictPrefs.sid : inCourse(p.s)) && (!q || norm([p.n, p.k, p.d, p.w].join(' ')).includes(q)));
         body.innerHTML = list.length ? `<div class="people">${list.map(personHTML).join('')}</div>` : '<p class="empty">該当する人物がいません。</p>';
         return;
       }
-      const list = TERMS.filter((t) => (!dictPrefs.sid || t.sid === dictPrefs.sid) && (!q || norm(t.term + ' ' + t.def).includes(q)));
+      const list = TERMS.filter((t) => (dictPrefs.sid ? t.sid === dictPrefs.sid : inCourse(t.sid)) && (!q || norm(t.term + ' ' + t.def).includes(q)));
       if (!list.length) {
         body.innerHTML = '<p class="empty">該当する用語がありません。</p>';
         return;
@@ -1807,7 +1853,7 @@
       <section class="section">
         <h2 class="section-title">このノートについて</h2>
         <div class="prose" style="font-size:.92rem">
-          <p>高校の「政治・経済」「倫理」「地理」「世界史」の範囲から、大人として知っておきたい基礎をまとめた個人用の学習ノートです。全${UNITS.length}講・用語${TERMS.length}語・人物${L.people.length}人・年表${L.timeline.length}件。</p>
+          <p>高校の「政治・経済」「倫理」「地理」「世界史」と「物理」「化学」「生物」「地学」の範囲から、大人として知っておきたい基礎をまとめた個人用の学習ノートです。全${UNITS.length}講・用語${TERMS.length}語・人物${L.people.length}人・年表${L.timeline.length}件。</p>
           <p>統計や制度の数字は執筆時点（2020年代半ば）のものです。最新の値は官公庁の資料で確かめてください。</p>
         </div>
       </section>

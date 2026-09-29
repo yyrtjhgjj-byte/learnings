@@ -28,6 +28,10 @@
   --eth: #87499f;
   --geo: #2a7a4c;
   --his: #ad3d3a;
+  --phy: #1f6f99;
+  --chm: #b0306f;
+  --bio: #52801c;
+  --ear: #6a5a9e;
 
   --shadow-1: 0 1px 2px rgba(27, 33, 48, 0.06);
   --shadow-2: 0 1px 2px rgba(27, 33, 48, 0.05), 0 6px 20px rgba(27, 33, 48, 0.07);
@@ -65,6 +69,10 @@
     --eth: #c894dc;
     --geo: #66c08d;
     --his: #ea8a80;
+    --phy: #6bb8e0;
+    --chm: #ec7fb2;
+    --bio: #9ccb5e;
+    --ear: #b0a2e6;
     --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
     color-scheme: dark;
@@ -90,6 +98,10 @@
   --eth: #c894dc;
   --geo: #66c08d;
   --his: #ea8a80;
+  --phy: #6bb8e0;
+  --chm: #ec7fb2;
+  --bio: #9ccb5e;
+  --ear: #b0a2e6;
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
   color-scheme: dark;
@@ -104,6 +116,10 @@
 [data-s="ethics"]    { --s: var(--eth); }
 [data-s="geography"] { --s: var(--geo); }
 [data-s="history"]   { --s: var(--his); }
+[data-s="physics"]   { --s: var(--phy); }
+[data-s="chemistry"] { --s: var(--chm); }
+[data-s="biology"]   { --s: var(--bio); }
+[data-s="earth"]     { --s: var(--ear); }
 [data-s="japan"]     { --s: var(--ink-2); }
 
 /* ---------- base ---------- */
@@ -286,6 +302,29 @@ main#view {
   main#view { margin-left: var(--rail-w); padding-bottom: 64px; }
   .page { padding-block: 32px 24px; }
 }
+
+/* 社会／理科の切り替え */
+.course {
+  display: inline-grid;
+  grid-auto-flow: column;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 10px;
+  background: var(--paper-2);
+  flex: none;
+}
+.course button {
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.course button[aria-pressed="true"] { background: var(--card); color: var(--ink); font-weight: 700; box-shadow: var(--shadow-1); }
+.rail .course { margin: 0 8px 14px; justify-self: start; align-self: flex-start; }
+@media (max-width: 420px) { .topbar .brand-sub { display: none; } }
 
 /* ---------- 共通パーツ ---------- */
 .idx {
