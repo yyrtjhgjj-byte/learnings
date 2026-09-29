@@ -633,6 +633,7 @@ main#view {
   text-decoration: none;
 }
 .continue-body { min-width: 0; flex: 1; }
+.continue-title, .continue-sub { display: block; }
 .continue-title { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .continue-sub { font-size: 0.8rem; color: var(--ink-3); }
 .continue svg { width: 20px; height: 20px; color: var(--ink-3); flex: none; }
