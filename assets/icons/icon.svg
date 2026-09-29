@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#1b2130"/>
+  <!-- インデックス（科目の色） -->
+  <rect x="330" y="104" width="96" height="44" rx="10" fill="#4f6fcf"/>
+  <rect x="330" y="160" width="96" height="44" rx="10" fill="#d49a34"/>
+  <rect x="330" y="216" width="96" height="44" rx="10" fill="#a56cc0"/>
+  <rect x="330" y="272" width="96" height="44" rx="10" fill="#3f9e68"/>
+  <rect x="330" y="328" width="96" height="44" rx="10" fill="#cf5d57"/>
+  <!-- ノート -->
+  <rect x="88" y="84" width="290" height="344" rx="20" fill="#f4f5f1"/>
+  <rect x="128" y="138" width="200" height="16" rx="8" fill="#c9cdc4"/>
+  <rect x="128" y="182" width="164" height="16" rx="8" fill="#c9cdc4"/>
+  <rect x="128" y="226" width="120" height="20" rx="4" fill="#e0560b"/>
+  <rect x="128" y="274" width="186" height="16" rx="8" fill="#c9cdc4"/>
+  <rect x="128" y="318" width="140" height="16" rx="8" fill="#c9cdc4"/>
+  <!-- 赤シート -->
+  <rect x="106" y="236" width="232" height="168" rx="16" fill="#d62f48" fill-opacity="0.82" transform="rotate(-8 222 320)"/>
+</svg>
