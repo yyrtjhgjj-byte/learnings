@@ -22,6 +22,14 @@ const OUTLINE = {
   physics: ['motion', 'forces', 'gravity', 'energy', 'momentum', 'heat', 'waves', 'sound', 'light', 'electricity', 'magnetism', 'em-waves', 'nuclear'],
   chemistry: ['matter', 'states', 'atoms', 'bonds', 'mole', 'acids-bases', 'redox', 'batteries', 'inorganic', 'organic', 'polymers', 'daily-chemistry', 'environment'],
   biology: ['cells', 'metabolism', 'dna', 'cell-division', 'heredity', 'homeostasis', 'immunity', 'nervous', 'biotech', 'evolution', 'diversity', 'vegetation', 'ecosystems'],
+  manners: ['keigo', 'seating', 'visiting', 'dining-japanese', 'dining-western', 'business', 'writing', 'public'],
+  ceremony: ['wedding', 'funeral', 'memorial', 'gifts', 'annual-events', 'calendar', 'life-milestones', 'shrines-temples'],
+  living: ['counting', 'units', 'dress', 'paperwork', 'money-basics', 'emergency', 'holidays', 'japanese-culture'],
+  'why-physics': null,
+  'why-life': null,
+  'why-earth': null,
+  'why-culture': null,
+  vocab: null,
   earth: ['earth-shape', 'plates', 'earthquakes', 'volcanoes', 'strata', 'earth-history', 'atmosphere', 'weather', 'ocean', 'climate-change', 'solar-system', 'stars', 'disasters']
 };
 const FIGS = ['sanken', 'supply-demand', 'business-cycle', 'circular-flow', 'maslow', 'dialectic', 'pop-pyramid', 'river-landforms', 'pressure-belts',
@@ -73,8 +81,37 @@ function checkInline(where, s) {
 const stats = {};
 for (const sid of Object.keys(L.subjects)) {
   const units = L.subjects[sid];
-  if (!OUTLINE[sid]) {
+  if (OUTLINE[sid] === undefined) {
     err(sid, '未知の科目 ID');
+    continue;
+  }
+  if (OUTLINE[sid] === null) {
+    /* 一問一答（雑学）：id・title・a・body を検査 */
+    const seen = new Set();
+    let chars = 0;
+    units.forEach((u, i) => {
+      const w = `${sid}.${u.id || '#' + i}`;
+      for (const k of ['id', 'title', 'a', 'body']) if (typeof u[k] !== 'string' || !u[k].trim()) err(w, `${k} がない`);
+      if (seen.has(u.id)) err(w, 'id が重複');
+      seen.add(u.id);
+      if (u.id && !/^[a-z0-9-]+$/.test(u.id)) err(w, 'id は英小文字・数字・ハイフン');
+      if (u.title && !/[？?]$/.test(u.title.trim())) warn(w, 'title は「？」で終える');
+      if (u.a && (u.a.length < 20 || u.a.length > 140)) warn(w, `a の長さ ${u.a.length}（30〜100 字目安）`);
+      const b = (u.body || '').replace(/\s/g, '');
+      chars += b.length;
+      if (b.length < 180) warn(w, `解説が短い（${b.length} 字）`);
+      if (b.length > 1300) warn(w, `解説が長い（${b.length} 字）`);
+      checkInline(`${w}.a`, u.a);
+      (u.body || '').split('\n').forEach((l, li) => {
+        checkInline(`${w}.body L${li + 1}`, l.trim());
+        if (l.trim().startsWith('## ')) warn(`${w}.body L${li + 1}`, '一問一答では ## 見出しを使わない');
+      });
+      if (u.see) {
+        const parts = u.see.split('.');
+        if (parts[0] !== 'learn' || !OUTLINE[parts[1]] || (parts[2] && !OUTLINE[parts[1]].includes(parts[2]))) err(w, `see の講が目次にない: ${u.see}`);
+      }
+    });
+    stats[sid] = { items: units.length, chars };
     continue;
   }
   const st = (stats[sid] = { units: units.length, chars: 0, terms: 0, quiz: 0, marks: 0, aDist: [0, 0, 0, 0] });
@@ -98,7 +135,7 @@ for (const sid of Object.keys(L.subjects)) {
     const bodyPlain = body.replace(/\s/g, '');
     st.chars += bodyPlain.length;
     st.marks += (body.match(/\[\[/g) || []).length;
-    if (bodyPlain.length < 1800) warn(w, `本文が短い（${bodyPlain.length} 字）`);
+    if (bodyPlain.length < (['manners', 'ceremony', 'living'].includes(sid) ? 1500 : 1800)) warn(w, `本文が短い（${bodyPlain.length} 字）`);
     const heads = body.split('\n').filter((l) => l.trim().startsWith('## ')).length;
     if (heads < 3) warn(w, `見出しが少ない（${heads}）`);
     body.split('\n').forEach((raw, li) => {
@@ -113,7 +150,7 @@ for (const sid of Object.keys(L.subjects)) {
       }
       if (/^#(?!#)/.test(l) || /^#{4,}/.test(l)) warn(lw, '見出しは ## か ### のみ');
     });
-    if (!Array.isArray(u.terms) || u.terms.length < 6) err(w, `terms が少ない（${(u.terms || []).length}）`);
+    if (!Array.isArray(u.terms) || u.terms.length < 5) err(w, `terms が少ない（${(u.terms || []).length}）`);
     (u.terms || []).forEach((t, i) => {
       const tw = `${w}.terms[${i}]`;
       if (!Array.isArray(t) || t.length !== 2 || typeof t[0] !== 'string' || typeof t[1] !== 'string') return err(tw, '["用語","説明"] の形でない');

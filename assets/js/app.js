@@ -88,7 +88,7 @@
      保存データ（localStorage。使えない環境でも落ちない）
      ========================================================= */
   const STORE_KEY = 'otona-shakai:v1';
-  const DEFAULTS = () => ({ read: {}, q: {}, cards: {}, days: [], last: null, sheet: false, theme: 'system', size: 'm', reverse: false, course: 'social' });
+  const DEFAULTS = () => ({ read: {}, q: {}, cards: {}, days: [], last: null, sheet: false, theme: 'system', size: 'm', reverse: false, course: 'social', qa: {}, once: {}, xp: 0, gems: 0, ach: {}, medals: {}, st: {}, mis: null, skins: ['default'], skin: 'default' });
   let S = DEFAULTS();
 
   function load() {
@@ -114,7 +114,11 @@
     if (!S.days.includes(k)) {
       S.days.push(k);
       if (S.days.length > 400) S.days = S.days.slice(-400);
+      if (typeof gainXP === 'function') gainXP(15);
     }
+    const h = new Date().getHours();
+    if (h < 4) S.st.night = 1;
+    if (h >= 5 && h < 7) S.st.early = 1;
   }
   function streak() {
     const set = new Set(S.days);
@@ -143,7 +147,7 @@
     const seen = new Set();
     L.subjects[sid].forEach((u, i) => {
       const key = `${sid}.${u.id}`;
-      const unit = Object.assign({}, u, { sid, key, no: i + 1 });
+      const unit = Object.assign({}, u, { sid, key, no: i + 1, qa: !!(META[sid] && META[sid].kind === 'qa') });
       UNITS.push(unit);
       UNIT[key] = unit;
       unit.termItems = [];
@@ -348,7 +352,12 @@
     s.t = Date.now();
     S.q[id] = s;
     touchDay();
-    save();
+    bump('answered');
+    if (ok) bump('correct');
+    gainXP(ok ? 10 : 2);
+    progressMission('quiz');
+    if (ok) progressMission('correct');
+    settle();
   }
   function weakIds(sids) {
     return Object.keys(S.q)
@@ -364,17 +373,308 @@
   }
   function gradeCard(key, ok) {
     const st = S.cards[key] || { b: 0, d: 0 };
+    const before = st.b;
     st.b = ok ? Math.min(st.b + 1, 5) : 0;
     st.d = Date.now() + (ok ? BOX_DAYS[st.b] * DAY - 3600000 : 0);
     S.cards[key] = st;
     touchDay();
-    save();
+    if (!key.startsWith('z:')) {
+      if (ok) bump('known');
+      if (ok && st.b === 5 && before < 5) bump('mastered');
+      gainXP(ok ? 4 : 1);
+      progressMission('card');
+    }
+    settle();
   }
   function dueKeys(prefixFilter) {
     const now = Date.now();
     return Object.keys(S.cards).filter((k) => S.cards[k].d <= now && (!prefixFilter || prefixFilter(k)));
   }
-  const cardSid = (key) => (key.startsWith('p:') ? (PERSON_BY_KEY[key] || {}).s : key.split(':')[0]);
+  const cardSid = (key) => (key.startsWith('p:') ? (PERSON_BY_KEY[key] || {}).s : key.startsWith('z:') ? key.slice(2).split('.')[0] : key.split(':')[0]);
+
+  /* =========================================================
+     ごほうび：経験値・レベル・宝石・実績メダル・勲章・ミッション
+     ========================================================= */
+  const LV_TITLES = [[1, '入門者'], [3, '見習い'], [5, '物知り'], [8, '博識'], [12, '教養人'], [16, '賢者'], [20, '生き字引'], [25, '歩く百科事典'], [30, '知の巨人']];
+  const lvNeed = (n) => 50 * n * (n - 1); /* レベル n に必要な累計経験値 */
+  function levelOf(xp) {
+    let n = 1;
+    while (lvNeed(n + 1) <= xp) n++;
+    return n;
+  }
+  function titleOf(lv) {
+    let t = LV_TITLES[0][1];
+    LV_TITLES.forEach(([l, name]) => {
+      if (lv >= l) t = name;
+    });
+    return t;
+  }
+  const TIER = { b: { name: '銅', gems: 1 }, s: { name: '銀', gems: 3 }, g: { name: '金', gems: 8 } };
+  const st = (k) => (S.st && S.st[k]) || 0;
+  const bump = (k, n = 1) => (S.st[k] = st(k) + n);
+  const lectureUnits = () => UNITS.filter((u) => !u.qa);
+  const qaUnits = () => UNITS.filter((u) => u.qa);
+  const readCount = () => lectureUnits().filter((u) => S.read[u.key]).length;
+  const ACH = [
+    { id: 'read1', n: 'はじめの一歩', d: '講を1つ読了する', t: 'b', ic: '読', test: () => readCount() >= 1 },
+    { id: 'read10', n: '読書家', d: '講を10読了する', t: 'b', ic: '読', test: () => readCount() >= 10 },
+    { id: 'read30', n: '本の虫', d: '講を30読了する', t: 's', ic: '読', test: () => readCount() >= 30 },
+    { id: 'read80', n: '学び続ける人', d: '講を80読了する', t: 's', ic: '読', test: () => readCount() >= 80 },
+    { id: 'readAll', n: '全講読破', d: 'すべての講を読了する', t: 'g', ic: '極', test: () => readCount() >= lectureUnits().length },
+    { id: 'q1', n: '初正解', d: '問題に1問正解する', t: 'b', ic: '問', test: () => st('correct') >= 1 },
+    { id: 'q100', n: '百問斬り', d: '累計100問正解する', t: 's', ic: '問', test: () => st('correct') >= 100 },
+    { id: 'q500', n: '五百問斬り', d: '累計500問正解する', t: 'g', ic: '問', test: () => st('correct') >= 500 },
+    { id: 'combo5', n: '波に乗る', d: 'クイズで5問連続正解', t: 'b', ic: '連', test: () => st('bestCombo') >= 5 },
+    { id: 'combo10', n: '絶好調', d: 'クイズで10問連続正解', t: 's', ic: '連', test: () => st('bestCombo') >= 10 },
+    { id: 'combo20', n: '無双', d: 'クイズで20問連続正解', t: 'g', ic: '連', test: () => st('bestCombo') >= 20 },
+    { id: 'perfect', n: '満点', d: '10問以上のクイズで全問正解', t: 's', ic: '満', test: () => st('perfect') >= 1 },
+    { id: 'perfect5', n: '満点常連', d: '満点を5回とる', t: 'g', ic: '満', test: () => st('perfect') >= 5 },
+    { id: 'card50', n: '暗記の芽', d: 'カードで「覚えた」を50回', t: 'b', ic: '札', test: () => st('known') >= 50 },
+    { id: 'card300', n: '暗記の鬼', d: 'カードで「覚えた」を300回', t: 's', ic: '札', test: () => st('known') >= 300 },
+    { id: 'master10', n: '定着', d: 'カード10枚を最上位の箱まで育てる', t: 's', ic: '箱', test: () => st('mastered') >= 10 },
+    { id: 'master100', n: '完全記憶', d: 'カード100枚を最上位の箱まで育てる', t: 'g', ic: '箱', test: () => st('mastered') >= 100 },
+    { id: 'qa1', n: '言えた！', d: '「なぜ？」に1問答えられた', t: 'b', ic: '答', test: () => st('qaOk') >= 1 },
+    { id: 'qa30', n: '説明上手', d: '「なぜ？」に30問答えられた', t: 's', ic: '答', test: () => st('qaOk') >= 30 },
+    { id: 'qaAll', n: 'なぜなに博士', d: 'すべての「なぜ？」に答えられた', t: 'g', ic: '博', test: () => qaUnits().length > 0 && qaUnits().every((u) => S.qa[u.key] && S.qa[u.key].ok) },
+    { id: 'streak3', n: '三日坊主卒業', d: '3日連続で学習する', t: 'b', ic: '続', test: () => streak() >= 3 },
+    { id: 'streak7', n: '一週間', d: '7日連続で学習する', t: 's', ic: '続', test: () => streak() >= 7 },
+    { id: 'streak30', n: '習慣化', d: '30日連続で学習する', t: 'g', ic: '続', test: () => streak() >= 30 },
+    { id: 'streak100', n: '百日修行', d: '100日連続で学習する', t: 'g', ic: '百', test: () => streak() >= 100 },
+    { id: 'days50', n: '通算五十日', d: '学習した日が通算50日', t: 's', ic: '暦', test: () => S.days.length >= 50 },
+    { id: 'order8', n: '時代感覚', d: '「どっちが先？」で8問以上正解', t: 'b', ic: '史', test: () => st('orderBest') >= 8 },
+    { id: 'order10', n: '歴史の目', d: '「どっちが先？」で全問正解', t: 's', ic: '史', test: () => st('orderBest') >= 10 },
+    { id: 'mission1', n: '今日の務め', d: 'デイリーミッションを初めて達成', t: 'b', ic: '務', test: () => st('missions') >= 1 },
+    { id: 'mission10', n: '皆勤賞', d: 'デイリーミッションを10回達成', t: 's', ic: '務', test: () => st('missions') >= 10 },
+    { id: 'mission50', n: '鉄人', d: 'デイリーミッションを50回達成', t: 'g', ic: '鉄', test: () => st('missions') >= 50 },
+    { id: 'lv5', n: '物知りの証', d: 'レベル5に到達', t: 'b', ic: '級', test: () => levelOf(S.xp) >= 5 },
+    { id: 'lv12', n: '教養人の証', d: 'レベル12に到達', t: 's', ic: '級', test: () => levelOf(S.xp) >= 12 },
+    { id: 'lv25', n: '百科事典の証', d: 'レベル25に到達', t: 'g', ic: '級', test: () => levelOf(S.xp) >= 25 },
+    { id: 'medal1', n: '初勲章', d: '科目の勲章を1つ得る', t: 's', ic: '勲', test: () => Object.keys(S.medals).length >= 1 },
+    { id: 'allround', n: '全方位', d: 'すべてのコースで1つ以上学ぶ', t: 's', ic: '全', test: () => Object.keys(COURSES).filter(hasCourse).every((c) => UNITS.some((u) => courseOf(u.sid) === c && S.read[u.key])) },
+    { id: 'sheet', n: '赤シート使い', d: '赤シートを使う', t: 'b', ic: '赤', test: () => st('sheet') >= 1 },
+    { id: 'search', n: '調べもの', d: '検索を使う', t: 'b', ic: '探', test: () => st('search') >= 1 },
+    { id: 'night', n: '夜ふかし学者', d: '深夜0〜4時に学習する', t: 'b', ic: '夜', hidden: true, test: () => st('night') >= 1 },
+    { id: 'early', n: '朝活', d: '朝5〜7時に学習する', t: 'b', ic: '朝', hidden: true, test: () => st('early') >= 1 },
+    { id: 'rich', n: '宝石商', d: '宝石を50個持つ', t: 's', ic: '宝', test: () => S.gems >= 50 }
+  ];
+  /* 勲章：その科目の講をすべて読了し、確認問題の8割以上に（直近で）正解。一問一答はすべて「言えた」 */
+  function mastered(sid) {
+    const us = unitsOf(sid);
+    if (!us.length) return false;
+    if (us[0].qa) return us.every((u) => S.qa[u.key] && S.qa[u.key].ok);
+    if (!us.every((u) => S.read[u.key])) return false;
+    const qs = us.flatMap((u) => u.qItems);
+    return qs.filter((q) => S.q[q.id] && S.q[q.id].l === 1).length >= qs.length * 0.8;
+  }
+  const MISSION_POOL = [
+    { k: 'read', n: '講を1つ読了する', goal: 1, lecture: true },
+    { k: 'quiz', n: '問題を10問解く', goal: 10, lecture: true },
+    { k: 'correct', n: '7問正解する', goal: 7, lecture: true },
+    { k: 'card', n: 'カードを15枚めくる', goal: 15, lecture: true },
+    { k: 'qa', n: '「なぜ？」に3問答える', goal: 3, qa: true },
+    { k: 'order', n: '「どっちが先？」を1回遊ぶ', goal: 1 }
+  ];
+  const missionDef = (k) => MISSION_POOL.find((m) => m.k === k) || { n: k, goal: 1 };
+  function missions() {
+    const today = dayKey();
+    if (!S.mis || S.mis.d !== today) {
+      const pool = MISSION_POOL.filter((m) => !(m.qa && !qaUnits().length) && !(m.lecture && !lectureUnits().length));
+      const pick = shuffle(pool, rng(hash('mission' + today))).slice(0, 3);
+      S.mis = { d: today, list: pick.map((m) => ({ k: m.k, p: 0 })), done: false };
+    }
+    return S.mis;
+  }
+  function progressMission(k, n = 1) {
+    const m = missions();
+    m.list.forEach((x) => {
+      if (x.k === k) x.p = Math.min(missionDef(k).goal, x.p + n);
+    });
+    if (!m.done && m.list.every((x) => x.p >= missionDef(x.k).goal)) {
+      m.done = true;
+      bump('missions');
+      S.gems += 3;
+      gainXP(50);
+      celebrate({ kind: 'mission', title: '今日のミッション達成', sub: '3つのミッションをすべてこなしました', gems: 3, xp: 50 });
+    }
+  }
+  function gainXP(n) {
+    const before = levelOf(S.xp);
+    S.xp += n;
+    const after = levelOf(S.xp);
+    if (after > before) {
+      S.gems += 2 * (after - before);
+      celebrate({ kind: 'level', level: after, title: `レベル ${after} に上がった`, sub: `称号「${titleOf(after)}」`, gems: 2 * (after - before) });
+    }
+  }
+  function checkRewards() {
+    for (let pass = 0; pass < 2; pass++) {
+      ACH.forEach((a) => {
+        if (S.ach[a.id]) return;
+        let ok = false;
+        try {
+          ok = a.test();
+        } catch (e) {
+          ok = false;
+        }
+        if (!ok) return;
+        S.ach[a.id] = Date.now();
+        S.gems += TIER[a.t].gems;
+        celebrate({ kind: 'ach', tier: a.t, ic: a.ic, title: a.n, sub: a.d, gems: TIER[a.t].gems });
+      });
+      ALL_SUBJECTS.forEach((sid) => {
+        if (S.medals[sid] || !mastered(sid)) return;
+        S.medals[sid] = Date.now();
+        S.gems += 10;
+        celebrate({ kind: 'medal', sid, title: `${META[sid].name}の勲章`, sub: 'この科目をきわめました', gems: 10 });
+      });
+    }
+  }
+  /* 変化のあとに毎回呼ぶ：実績を確かめ、保存し、お祝いを出す */
+  function settle() {
+    checkRewards();
+    save();
+    flushCelebrations();
+    updateLvChip();
+  }
+
+  /* お祝いの演出 */
+  const celebQueue = [];
+  let celebShowing = false;
+  function celebrate(c) {
+    celebQueue.push(c);
+  }
+  function flushCelebrations() {
+    if (!celebShowing && celebQueue.length) showCeleb(celebQueue.shift());
+  }
+  const gemSVG = (cls = 'gem') =>
+    `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h8l3 4-7 8-7-8z" class="gem-body"/><path d="M1 6.5h14M5.6 6.5 8 14.5l2.4-8M4 2.5l1.6 4L8 2.5l2.4 4L12 2.5" class="gem-cut"/></svg>`;
+  function badgeSVG(c, size = 96) {
+    if (c.kind === 'medal') {
+      const pts = [];
+      for (let i = 0; i < 24; i++) {
+        const r = i % 2 ? 36 : 44;
+        const a = (Math.PI * 2 * i) / 24 - Math.PI / 2;
+        pts.push(`${(48 + r * Math.cos(a)).toFixed(1)},${(52 + r * Math.sin(a)).toFixed(1)}`);
+      }
+      return `<svg viewBox="0 0 96 100" width="${size}" height="${size}" data-s="${c.sid}" aria-hidden="true">
+        <polygon points="${pts.join(' ')}" class="md-rosette"/><circle cx="48" cy="52" r="28" class="md-core"/>
+        <text x="48" y="62" text-anchor="middle" font-size="28" class="md-glyph">${esc(META[c.sid].tag)}</text></svg>`;
+    }
+    if (c.kind === 'level') {
+      return `<svg viewBox="0 0 96 100" width="${size}" height="${size}" aria-hidden="true">
+        <path d="M48 6 86 28v44L48 94 10 72V28z" class="md-level"/><path d="M48 16 77 33v34L48 84 19 67V33z" class="md-level-in"/>
+        <text x="48" y="44" text-anchor="middle" font-size="13" class="md-glyph-s">Lv</text>
+        <text x="48" y="72" text-anchor="middle" font-size="30" class="md-glyph-s num">${c.level}</text></svg>`;
+    }
+    if (c.kind === 'mission') {
+      return `<svg viewBox="0 0 96 100" width="${size}" height="${size}" aria-hidden="true">
+        <circle cx="48" cy="50" r="40" class="md-stamp"/><circle cx="48" cy="50" r="33" class="md-stamp-in"/>
+        <text x="48" y="60" text-anchor="middle" font-size="26" class="md-stamp-t">達成</text></svg>`;
+    }
+    const tier = c.tier || 'b';
+    return `<svg viewBox="0 0 96 100" width="${size}" height="${size}" aria-hidden="true">
+      <path d="M30 2h14l8 30H38z" class="md-ribbon-a"/><path d="M52 2h14L58 32H44z" class="md-ribbon-b"/>
+      <circle cx="48" cy="62" r="33" class="md-${tier}"/><circle cx="48" cy="62" r="26" class="md-${tier}-in"/>
+      <text x="48" y="72" text-anchor="middle" font-size="26" class="md-glyph">${esc(c.ic || '賞')}</text></svg>`;
+  }
+  function showCeleb(c) {
+    celebShowing = true;
+    const el = document.getElementById('celebrate');
+    const kindLabel = { ach: `実績メダル（${TIER[c.tier || 'b'].name}）`, medal: '勲章', level: 'レベルアップ', mission: 'デイリーミッション' }[c.kind] || '';
+    el.innerHTML = `<div class="celeb-card" role="dialog" aria-modal="true" aria-label="${esc(c.title)}">
+        <div class="celeb-badge">${badgeSVG(c)}</div>
+        <p class="celeb-kind">${kindLabel}</p>
+        <h2 class="celeb-title">${esc(c.title)}</h2>
+        <p class="celeb-sub">${esc(c.sub || '')}</p>
+        <p class="celeb-gain">${c.gems ? `${gemSVG()}<b class="num">+${c.gems}</b>` : ''}${c.xp ? `<span class="num">+${c.xp} XP</span>` : ''}</p>
+        <button type="button" class="btn btn-primary" id="celebOk">やった！</button>
+      </div>`;
+    el.hidden = false;
+    confetti();
+    const close = () => {
+      el.hidden = true;
+      el.innerHTML = '';
+      celebShowing = false;
+      setTimeout(flushCelebrations, 180);
+    };
+    el.querySelector('#celebOk').addEventListener('click', close);
+    el.onclick = (e) => {
+      if (e.target === el) close();
+    };
+    el.querySelector('#celebOk').focus({ preventScroll: true });
+  }
+  function confetti() {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const cv = document.getElementById('confetti');
+    if (!cv || !cv.getContext) return;
+    const ctx = cv.getContext('2d');
+    const W = (cv.width = window.innerWidth);
+    const H = (cv.height = window.innerHeight);
+    const css = getComputedStyle(document.documentElement);
+    const colors = ['--pol', '--eco', '--eth', '--geo', '--his', '--pen', '--gold'].map((v) => css.getPropertyValue(v).trim() || '#e0560b');
+    const parts = Array.from({ length: 110 }, () => ({
+      x: W / 2 + (Math.random() - 0.5) * 80,
+      y: H * 0.42,
+      vx: (Math.random() - 0.5) * 12,
+      vy: -Math.random() * 12 - 4,
+      r: Math.random() * Math.PI,
+      vr: (Math.random() - 0.5) * 0.3,
+      w: 6 + Math.random() * 6,
+      h: 3 + Math.random() * 4,
+      c: colors[Math.floor(Math.random() * colors.length)]
+    }));
+    cv.hidden = false;
+    const t0 = performance.now();
+    (function frame(t) {
+      const dt = t - t0;
+      ctx.clearRect(0, 0, W, H);
+      parts.forEach((p) => {
+        p.vy += 0.35;
+        p.vx *= 0.99;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.r += p.vr;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.r);
+        ctx.fillStyle = p.c;
+        ctx.globalAlpha = Math.max(0, 1 - dt / 1800);
+        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        ctx.restore();
+      });
+      if (dt < 1800) requestAnimationFrame(frame);
+      else {
+        ctx.clearRect(0, 0, W, H);
+        cv.hidden = true;
+      }
+    })(t0);
+  }
+  function updateLvChip() {
+    const el = document.getElementById('lvchip');
+    if (el) el.innerHTML = `<span class="lv">Lv<b class="num">${levelOf(S.xp)}</b></span><span class="gems">${gemSVG()}<b class="num">${S.gems}</b></span>`;
+  }
+
+  /* 着せ替え（宝石で交換） */
+  const SKINS = [
+    { id: 'default', n: '標準', cost: 0, sw: '--pen-base' },
+    { id: 'sakura', n: '桜', cost: 15, sw: '#e0447a' },
+    { id: 'wakatake', n: '若竹', cost: 15, sw: '#4f9a3f' },
+    { id: 'ai', n: '藍', cost: 15, sw: '#3b6fd1' },
+    { id: 'kin', n: '金箔', cost: 30, sw: '#c9961c' }
+  ];
+
+  /* 一問一答の自己採点 */
+  function gradeQA(u, ok) {
+    const prev = S.qa[u.key];
+    S.qa[u.key] = { ok: ok ? 1 : 0, n: ((prev && prev.n) || 0) + 1, t: Date.now() };
+    if (!S.read[u.key]) S.read[u.key] = Date.now();
+    if (ok && !(prev && prev.ok)) bump('qaOk');
+    touchDay();
+    gainXP(ok ? 8 : 2);
+    progressMission('qa');
+    settle();
+  }
+
 
   /* =========================================================
      画面の骨組み
@@ -399,29 +699,36 @@
     { r: 'timeline', label: '年表', ic: 'timeline' },
     { r: 'dict', label: '辞典', ic: 'dict' }
   ];
-  const NAV_GROUP = { quiz: 'practice', cards: 'practice', order: 'practice', record: 'practice', digest: 'learn' };
+  const NAV_GROUP = { quiz: 'practice', cards: 'practice', order: 'practice', record: 'practice', awards: 'practice', digest: 'learn' };
 
   function buildChrome() {
     const C = COURSES[curCourse()];
-    const sw = hasCourse('science')
-      ? `<div class="course" role="group" aria-label="社会と理科の切り替え">${Object.keys(COURSES)
-          .filter(hasCourse)
-          .map((c) => `<button type="button" data-course="${c}" aria-pressed="${c === curCourse()}">${COURSES[c].name}</button>`)
-          .join('')}</div>`
-      : '';
+    const courses = Object.keys(COURSES).filter(hasCourse);
+    const menu = `<div class="course-menu" id="courseMenu" hidden role="menu">${courses
+      .map(
+        (c) => `<button type="button" role="menuitemradio" data-course="${c}" aria-checked="${c === curCourse()}">
+          <b>${COURSES[c].brand}</b><span>${COURSES[c].list}</span></button>`
+      )
+      .join('')}</div>`;
+    const brand = (id) =>
+      courses.length > 1
+        ? `<button type="button" class="brand brand-btn" id="${id}" aria-haspopup="true" aria-expanded="false"><span class="brand-mark">${C.brand}</span><svg class="brand-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg><span class="brand-sub">${C.sub}</span></button>`
+        : `<a class="brand" href="#home"><span class="brand-mark">${C.brand}</span><span class="brand-sub">${C.sub}</span></a>`;
     document.getElementById('topbar').innerHTML = `
-      <a class="brand" href="#home"><span class="brand-mark">${C.brand}</span><span class="brand-sub">${C.sub}</span></a>
-      ${sw}
-      <a class="iconbtn" href="#search" aria-label="検索">${icon('search')}</a>
-      <a class="iconbtn settings-btn" href="#settings" aria-label="設定">${icon('settings')}</a>`;
+      ${brand('brandTop')}
+      <a class="lvchip" id="lvchip" href="#awards" aria-label="レベルと宝石（実績を見る）"></a>
+      <a class="iconbtn" href="#search" aria-label="検索">${icon('search')}</a>`;
+    const oldMenu = document.getElementById('courseMenu');
+    if (oldMenu) oldMenu.remove();
+    document.body.insertAdjacentHTML('beforeend', menu);
     document.getElementById('tabbar').innerHTML = NAV.map(
       (n) => `<a class="tab" href="#${n.r}" data-r="${n.r}">${icon(n.ic)}<span>${n.label}</span></a>`
     ).join('');
     document.getElementById('rail').innerHTML = `
-      <a class="brand" href="#home"><span class="brand-mark">${C.brand}</span><span class="brand-sub">${C.sub}</span></a>
-      ${sw}
+      ${brand('brandRail')}
       ${NAV.map((n) => `<a class="rail-link" href="#${n.r}" data-r="${n.r}">${icon(n.ic)}<span>${n.label}</span></a>`).join('')}
       <a class="rail-link" href="#search" data-r="search">${icon('search')}<span>検索</span></a>
+      <a class="rail-link" href="#awards" data-r="awards">${icon('record')}<span>実績とごほうび</span></a>
       <div class="rail-sep"></div>
       ${SUBJ().map(
         (sid) =>
@@ -429,21 +736,47 @@
       ).join('')}
       <div class="rail-sep"></div>
       <a class="rail-link" href="#settings" data-r="settings">${icon('settings')}<span>設定</span></a>
-      <div class="rail-foot">全${UNITS.length}講・用語${TERMS.length}語・人物${L.people.length}人</div>`;
-    document.querySelectorAll('[data-course]').forEach((b) =>
+      <div class="rail-foot">全${UNITS.length}項目・用語${TERMS.length}語・人物${L.people.length}人</div>`;
+    const menuEl = document.getElementById('courseMenu');
+    const openMenu = (btn) => {
+      const open = menuEl.hidden;
+      menuEl.hidden = !open;
+      document.querySelectorAll('.brand-btn').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+      if (open) {
+        btn.setAttribute('aria-expanded', 'true');
+        const r = btn.getBoundingClientRect();
+        menuEl.style.left = Math.max(8, r.left) + 'px';
+        menuEl.style.top = r.bottom + 6 + 'px';
+      }
+    };
+    document.querySelectorAll('.brand-btn').forEach((b) => b.addEventListener('click', (e) => (e.stopPropagation(), openMenu(b))));
+    menuEl.querySelectorAll('[data-course]').forEach((b) =>
       b.addEventListener('click', () => {
-        if (b.dataset.course === curCourse()) return;
-        S.course = b.dataset.course;
-        save();
-        quizPrefs.sids = [];
-        cardPrefs.sids = [];
-        dictPrefs.sid = '';
-        buildChrome();
-        const r = location.hash.replace(/^#/, '').split('.')[0];
-        if (['learn', 'digest', 'quiz', 'cards'].includes(r) && location.hash.split('.').length > 1) location.hash = '#' + (r === 'digest' ? 'digest' : r === 'learn' ? 'learn' : r);
-        else route();
+        menuEl.hidden = true;
+        switchCourse(b.dataset.course);
       })
     );
+    updateLvChip();
+  }
+  document.addEventListener('click', (e) => {
+    const m = document.getElementById('courseMenu');
+    if (m && !m.hidden && !e.target.closest('#courseMenu')) {
+      m.hidden = true;
+      document.querySelectorAll('.brand-btn').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+    }
+  });
+  function switchCourse(c) {
+    if (c === curCourse()) return;
+    S.course = c;
+    save();
+    quizPrefs.sids = [];
+    cardPrefs.sids = [];
+    dictPrefs.sid = '';
+    buildChrome();
+    const r = location.hash.replace(/^#/, '').split('.')[0];
+    if (['learn', 'digest', 'quiz', 'cards'].includes(r) && location.hash.split('.').length > 1) location.hash = '#' + r;
+    else route();
+    toast(`${COURSES[c].brand}に切り替えました`);
   }
   function setNav(r) {
     const g = NAV_GROUP[r] || r;
@@ -461,7 +794,8 @@
   }
   fab.addEventListener('click', () => {
     S.sheet = !S.sheet;
-    save();
+    if (S.sheet) bump('sheet');
+    settle();
     document.querySelectorAll('.k.open').forEach((k) => k.classList.remove('open'));
     setSheetAvailable(true);
     toast(S.sheet ? '赤シートをのせました。語句をタップでめくれます' : '赤シートを外しました');
@@ -484,6 +818,8 @@
     }
     if (S.size === 'm') root.removeAttribute('data-size');
     else root.setAttribute('data-size', S.size);
+    if (S.skin && S.skin !== 'default') root.setAttribute('data-skin', S.skin);
+    else root.removeAttribute('data-skin');
   }
 
   window.addEventListener(
@@ -522,7 +858,7 @@
     let title = '';
     switch (r) {
       case 'learn':
-        if (a && b && UNIT[`${a}.${b}`]) title = viewLesson(UNIT[`${a}.${b}`]);
+        if (a && b && UNIT[`${a}.${b}`]) title = UNIT[`${a}.${b}`].qa ? viewQA(UNIT[`${a}.${b}`]) : viewLesson(UNIT[`${a}.${b}`]);
         else if (a && META[a] && L.subjects[a]) title = viewSubject(a);
         else title = viewLearn();
         break;
@@ -540,6 +876,9 @@
         break;
       case 'order':
         title = viewOrder();
+        break;
+      case 'awards':
+        title = viewAwards();
         break;
       case 'record':
         title = viewRecord();
@@ -560,6 +899,8 @@
         title = viewHome();
     }
     setNav(r);
+    const cm = document.getElementById('courseMenu');
+    if (cm) cm.hidden = true;
     const brand = COURSES[curCourse()].brand;
     document.title = title ? `${title} | ${brand}` : brand;
     window.scrollTo(0, 0);
@@ -573,11 +914,12 @@
     const m = META[sid];
     const us = unitsOf(sid);
     const done = us.filter((u) => S.read[u.key]).length;
+    const unitWord = us[0] && us[0].qa ? '問' : '講';
     return `<a class="tile" data-s="${sid}" href="#learn.${sid}">
       <span class="tile-tab" aria-hidden="true">${m.tag}</span>
       <span class="tile-name">${m.name}<small>${m.en}</small></span>
       <span class="tile-desc">${m.desc}</span>
-      <span class="tile-foot"><span class="bar"><i style="width:${pct(done, us.length)}%"></i></span><span class="num">${done}/${us.length}講</span></span>
+      <span class="tile-foot"><span class="bar"><i style="width:${pct(done, us.length)}%"></i></span><span class="num">${done}/${us.length}${unitWord}</span>${S.medals[sid] ? '<span class="pill pen">勲章</span>' : ''}</span>
     </a>`;
   }
 
@@ -731,18 +1073,36 @@
     const person = CP.length ? CP[Math.floor(r() * CP.length)] : null;
     const due = dueKeys((k) => inCourse(cardSid(k))).length;
     const weak = weakIds(SUBJ()).length;
-    const st = streak();
+    const stk = streak();
+    const lv = levelOf(S.xp);
+    const lvPct = pct(S.xp - lvNeed(lv), lvNeed(lv + 1) - lvNeed(lv));
+    const isQA = CU.length && CU.every((u) => u.qa);
+    const unitWord = isQA ? '問' : '講';
+    const dqa = isQA ? CU[Math.floor(r() * CU.length)] : null;
+    const mis = missions();
 
     view.innerHTML = `<div class="page">
       <section class="hero">
         <p class="hero-date num">${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日（${wd}）</p>
         <h1 class="hero-title">知っておくべき<br><span class="k">${C.name}</span>を、ひととおり。</h1>
-        <p class="hero-lead">${C.list}。高校で習うはずの基礎を全${total}講にまとめたノートです。オレンジの語句は、赤シートで隠して覚えられます。</p>
+        <p class="hero-lead">${C.list}。${
+          isQA ? `「なぜ？」に自分の言葉で答える練習を全${total}問。答えを考えてから、めくって確かめます。` : `知っておきたい基礎を全${total}講にまとめたノートです。オレンジの語句は、赤シートで隠して覚えられます。`
+        }</p>
         <div class="stats">
-          <div class="stat"><b>${st}<small>日</small></b><span>連続学習</span></div>
-          <div class="stat"><b>${done}<small>/${total}</small></b><span>読了した講</span></div>
-          <div class="stat"><b>${acc.p == null ? '—' : acc.p}<small>${acc.p == null ? '' : '%'}</small></b><span>正答率</span></div>
+          <div class="stat"><b>${stk}<small>日</small></b><span>連続学習</span></div>
+          <div class="stat"><b>${done}<small>/${total}</small></b><span>${isQA ? '答えた問い' : '読了した講'}</span></div>
+          <a class="stat stat-link" href="#awards"><b>Lv${lv}</b><span class="bar lvbar"><i style="width:${lvPct}%"></i></span><span>${titleOf(lv)}・${gemSVG()}${S.gems}</span></a>
         </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2 class="section-title">今日のミッション ${mis.done ? '<span class="pill ok">達成</span>' : ''}</h2><a class="section-link" href="#awards">実績とごほうび →</a></div>
+        <div class="card missions">${mis.list
+          .map((x) => {
+            const d = missionDef(x.k);
+            return `<div class="mission${x.p >= d.goal ? ' done' : ''}"><span class="mission-check">${x.p >= d.goal ? icon('check') : ''}</span><span class="mission-name">${d.n}</span><span class="num mission-p">${x.p}/${d.goal}</span></div>`;
+          })
+          .join('')}<p class="hint">3つそろうと宝石3個と50 XP。毎日入れ替わります。</p></div>
       </section>
 
       ${
@@ -751,24 +1111,28 @@
         <div class="section-head"><h2 class="section-title">${lastLabel}</h2></div>
         <a class="card continue" data-s="${last.sid}" href="#learn.${last.key}">
           <span class="idx">${META[last.sid].tag}</span>
-          <span class="continue-body"><span class="continue-title">${esc(last.title)}</span><span class="continue-sub">${sname(last.sid)} 第${last.no}講</span></span>
+          <span class="continue-body"><span class="continue-title">${esc(last.title)}</span><span class="continue-sub">${sname(last.sid)} ${last.qa ? 'Q' + last.no : `第${last.no}講`}</span></span>
           ${icon('chevron')}
         </a>
       </section>`
           : ''
       }
 
-      <section class="section">
-        <div class="section-head"><h2 class="section-title">今日の一問</h2><a class="section-link" href="#quiz">もっと解く →</a></div>
+      ${
+        dq || dqa
+          ? `<section class="section">
+        <div class="section-head"><h2 class="section-title">${dqa ? '今日のなぜ？' : '今日の一問'}</h2><a class="section-link" href="${dqa ? '#cards' : '#quiz'}">もっと解く →</a></div>
         <div id="dailyQ"></div>
-      </section>
+      </section>`
+          : ''
+      }
 
       <section class="section">
-        <div class="section-head"><h2 class="section-title">科目</h2><a class="section-link" href="#learn">全講の目次 →</a></div>
+        <div class="section-head"><h2 class="section-title">科目</h2><a class="section-link" href="#learn">目次 →</a></div>
         <div class="tiles">${SUBJ().map(tileHTML).join('')}</div>
       </section>
 
-      <section class="section">
+      ${isQA ? '' : `<section class="section">
         <div class="section-head"><h2 class="section-title">復習</h2><a class="section-link" href="#record">学習記録 →</a></div>
         <div class="duo">
           <div class="card mini">
@@ -782,7 +1146,7 @@
             <div class="btn-row"><a class="btn btn-sm${weak ? ' btn-primary' : ''}" href="${weak ? '#quiz.weak' : '#quiz'}">${weak ? '解き直す' : 'クイズへ'}</a></div>
           </div>
         </div>
-      </section>
+      </section>`}
 
       ${
         person
@@ -793,7 +1157,8 @@
           : ''
       }
     </div>`;
-    if (dq) view.querySelector('#dailyQ').appendChild(makeQuestion(dq));
+    if (dqa) view.querySelector('#dailyQ').appendChild(qaCard(dqa));
+    else if (dq) view.querySelector('#dailyQ').appendChild(makeQuestion(dq));
     return '';
   }
 
@@ -824,6 +1189,14 @@
   }
 
   function unitRowHTML(u) {
+    if (u.qa) {
+      const r = S.qa[u.key];
+      return `<a class="unit-row qa-row" data-s="${u.sid}" href="#learn.${u.key}">
+        <span class="unit-no">Q${u.no}</span>
+        <span class="unit-title">${esc(u.title)}</span>
+        <span class="unit-status">${r ? (r.ok ? '<span class="pill ok">言えた</span>' : '<span class="pill ng">もう一度</span>') : ''}</span>
+      </a>`;
+    }
     const a = unitAcc(u);
     return `<a class="unit-row" data-s="${u.sid}" href="#learn.${u.key}">
       <span class="unit-no">第${u.no}講</span>
@@ -849,14 +1222,17 @@
         <p class="eyebrow">${m.en.toUpperCase()}</p>
         <h1>${m.name}</h1>
         <p>${m.desc}</p>
-        <div class="subject-meta"><span class="bar"><i style="width:${pct(done, us.length)}%"></i></span><span class="num">読了 ${done}/${us.length}</span>${
+        <div class="subject-meta"><span class="bar"><i style="width:${pct(done, us.length)}%"></i></span><span class="num">${us[0] && us[0].qa ? '答えた' : '読了'} ${done}/${us.length}</span>${
           acc.p != null ? `<span class="num">正答率 ${acc.p}%</span>` : ''
         }</div>
-        <div class="btn-row">
-          <a class="btn btn-subject" href="#learn.${us[0].key}">第1講から読む</a>
+        <div class="btn-row">${
+          us[0].qa
+            ? `<a class="btn btn-subject" href="#learn.${(us.find((u) => !(S.qa[u.key] && S.qa[u.key].ok)) || us[0]).key}">答える練習を始める</a>
+          <a class="btn" href="#cards.${sid}">${icon('cards')}カードで練習</a>`
+            : `<a class="btn btn-subject" href="#learn.${us[0].key}">第1講から読む</a>
           <a class="btn" href="#quiz.${sid}">${icon('quiz')}クイズ</a>
-          <a class="btn" href="#cards.${sid}">${icon('cards')}カード</a>
-        </div>
+          <a class="btn" href="#cards.${sid}">${icon('cards')}カード</a>`
+        }</div>
       </header>
       <div class="units">${us.map(unitRowHTML).join('')}</div>
     </div>`;
@@ -957,7 +1333,12 @@
       if (on) S.read[u.key] = Date.now();
       else delete S.read[u.key];
       touchDay();
-      save();
+      if (on && !S.once[u.key]) {
+        S.once[u.key] = 1;
+        gainXP(30);
+        progressMission('read');
+      }
+      settle();
       doneBtn.textContent = on ? '未読に戻す' : '読了にする';
       doneBtn.classList.toggle('btn-subject', !on);
       view.querySelector('#doneMsg').textContent = on ? 'この講は読了済みです。' : '読み終えたら記録しておきましょう。';
@@ -992,8 +1373,10 @@
           (x) => `<section class="section" data-s="${x}">
           <h2 class="section-title"><span class="idx">${META[x].tag}</span>${META[x].name}</h2>
           ${unitsOf(x)
-            .map(
-              (u) => `<div class="points">
+            .map((u) =>
+              u.qa
+                ? `<div class="points qa-digest"><h2><a href="#learn.${u.key}" style="text-decoration:none;color:inherit">Q${u.no}　${esc(u.title)}</a></h2><p><span class="k">${esc(u.a)}</span></p></div>`
+                : `<div class="points">
               <h2><a href="#learn.${u.key}" style="text-decoration:none;color:inherit">第${u.no}講　${esc(u.title)}</a></h2>
               <ol>${(u.points || []).map((p) => `<li><span>${inline(p)}</span></li>`).join('')}</ol>
             </div>`
@@ -1019,6 +1402,7 @@
     const cTerms = TERMS.filter((t) => inCourse(t.sid)).length;
     const cPeople = L.people.filter((p) => inCourse(p.s)).length;
     const qTotal = QS.filter((q) => inCourse(q.sid)).length + cTerms;
+    const cQA = UNITS.filter((u) => u.qa && inCourse(u.sid)).length;
     view.innerHTML = `<div class="page">
       <header class="lesson-head">
         <p class="eyebrow">PRACTICE</p>
@@ -1026,7 +1410,13 @@
         <p class="lesson-lead">読んだら、解く。解いたら、忘れる前にもう一度。答えた結果はこの端末に記録されます。</p>
       </header>
       <div class="practice-grid">
-        <a class="card mode" href="#quiz">
+        ${cQA ? `<a class="card mode" href="#cards">
+          <span class="mode-icon">${icon('cards')}</span>
+          <h3>答える練習</h3>
+          <p>「なぜ？」を見て、自分の言葉で答えてからめくる。「言えた」ものは間隔をあけて、また出てきます。</p>
+          <span class="mode-foot num">${cQA}問${due ? `・今日の復習 ${due}問` : ''}</span>
+        </a>` : ''}
+        ${qTotal ? `<a class="card mode" href="#quiz">
           <span class="mode-icon">${icon('quiz')}</span>
           <h3>4択クイズ</h3>
           <p>各講の確認問題と、用語から自動で作る問題。科目・問題数・苦手優先などを選べます。</p>
@@ -1037,18 +1427,24 @@
           <h3>暗記カード</h3>
           <p>用語をめくって「覚えた／まだ」。覚えたカードは 1日後、3日後、1週間後…と間隔をあけて出てきます。</p>
           <span class="mode-foot num">${cTerms}枚${due ? `・今日の復習 ${due}枚` : ''}</span>
-        </a>
-        <a class="card mode" href="#cards.people">
+        </a>` : ''}
+        ${cPeople ? `<a class="card mode" href="#cards.people">
           <span class="mode-icon">${icon('people')}</span>
           <h3>人物カード</h3>
           <p>ソクラテス、ロック、ケインズ、ナポレオン…名前を見て、何をした人か言えるか。</p>
           <span class="mode-foot num">${cPeople}人</span>
-        </a>
+        </a>` : ''}
         <a class="card mode" href="#order">
           <span class="mode-icon">${icon('order')}</span>
           <h3>どっちが先？</h3>
           <p>年表から 2 つの出来事を出題。先に起きたほうを選ぶだけ。時代の前後関係がつかめます。</p>
           <span class="mode-foot num">出来事 ${L.timeline.length}件から出題</span>
+        </a>
+        <a class="card mode" href="#awards">
+          <span class="mode-icon">${badgeSVG({ kind: 'ach', tier: 'g', ic: '賞' }, 30)}</span>
+          <h3>実績とごほうび</h3>
+          <p>レベル・宝石・実績メダル・科目の勲章。宝石はノートの着せ替えと交換できます。</p>
+          <span class="mode-foot num">Lv${levelOf(S.xp)}・メダル ${Object.keys(S.ach).length}/${ACH.length}・勲章 ${Object.keys(S.medals).length}</span>
         </a>
       </div>
       <section class="section">
@@ -1146,6 +1542,7 @@
   function runQuiz(questions, label, unit) {
     let idx = 0;
     const results = [];
+    let combo = 0;
     view.innerHTML = `<div class="page">
       <nav class="crumbs"><a href="#practice">演習</a><span aria-hidden="true">›</span><a href="#quiz">4択クイズ</a><span aria-hidden="true">›</span><span>${esc(label)}</span></nav>
       <div class="progress-line"><i id="qProg" style="width:0%"></i></div>
@@ -1166,6 +1563,10 @@
         label: `${idx + 1} / ${questions.length}`,
         onAnswer: (ok) => {
           results.push({ q, ok });
+          combo = ok ? combo + 1 : 0;
+          if (combo > st('bestCombo')) S.st.bestCombo = combo;
+          if (combo >= 3 && (combo === 3 || combo % 5 === 0)) toast(`${combo}問連続正解！`);
+          settle();
           next.hidden = false;
           next.textContent = idx + 1 < questions.length ? '次へ' : '結果を見る';
           next.focus({ preventScroll: true });
@@ -1176,6 +1577,10 @@
     function finish() {
       keyHandler = null;
       const ok = results.filter((r) => r.ok).length;
+      if (results.length >= 10 && ok === results.length) {
+        bump('perfect');
+        settle();
+      }
       const p = pct(ok, results.length);
       const msg = p === 100 ? '満点。お見事です。' : p >= 80 ? 'かなり身についています。' : p >= 50 ? 'あと一歩。間違えた所だけ見直しましょう。' : '読み直してから、もう一度。';
       const wrong = results.filter((r) => !r.ok);
@@ -1241,6 +1646,8 @@
     let items;
     if (kind === 'people') {
       items = L.people.filter((p) => sids.includes(p.s)).map((p) => ({ key: 'p:' + p.n, sid: p.s, person: p }));
+    } else if (kind === 'qa') {
+      items = UNITS.filter((u) => u.qa && sids.includes(u.sid)).map((u) => ({ key: 'z:' + u.key, sid: u.sid, qa: u }));
     } else {
       items = TERMS.filter((t) => sids.includes(t.sid)).map((t) => ({ key: t.key, sid: t.sid, term: t }));
     }
@@ -1252,13 +1659,14 @@
   }
 
   function viewCards(a) {
-    const kind = a === 'people' ? 'people' : 'terms';
+    const qaCourse = SUBJ().every((x) => META[x].kind === 'qa');
+    const kind = a === 'people' ? 'people' : qaCourse || (META[a] && META[a].kind === 'qa') ? 'qa' : 'terms';
     if (a && META[a]) cardPrefs.sids = [a];
-    const title = kind === 'people' ? '人物カード' : '暗記カード';
+    const title = kind === 'people' ? '人物カード' : kind === 'qa' ? '答える練習' : '暗記カード';
     view.innerHTML = `<div class="page">
       <nav class="crumbs"><a href="#practice">演習</a><span aria-hidden="true">›</span><span>${title}</span></nav>
       <header class="lesson-head"><h1 class="lesson-title">${title}</h1>
-        <p class="lesson-lead">${kind === 'people' ? '名前を見て、何をした人・何を考えた人か思い浮かべてからめくります。' : '用語を見て、意味を説明できるか。答えを思い浮かべてからめくります。'}</p></header>
+        <p class="lesson-lead">${kind === 'people' ? '名前を見て、何をした人・何を考えた人か思い浮かべてからめくります。' : kind === 'qa' ? '問いを見て、声に出すか頭の中で答えてからめくります。言えたかどうかは自己採点です。' : '用語を見て、意味を説明できるか。答えを思い浮かべてからめくります。'}</p></header>
       <div class="card setup">
         <div class="setup-row"><span class="lbl">科目（未選択ならすべて）</span>${subjectChips(cardPrefs.sids)}</div>
         <div class="setup-row"><span class="lbl">並び</span>${segHTML('order', [['due', '復習待ち→新しい順'], ['random', 'ランダム']], cardPrefs.order)}</div>
@@ -1317,7 +1725,7 @@
     let known = 0;
     let seen = 0;
     const total = deck.length;
-    const title = kind === 'people' ? '人物カード' : '暗記カード';
+    const title = kind === 'people' ? '人物カード' : kind === 'qa' ? '答える練習' : '暗記カード';
     view.innerHTML = `<div class="page">
       <nav class="crumbs"><a href="#practice">演習</a><span aria-hidden="true">›</span><a href="#cards${kind === 'people' ? '.people' : ''}">${title}</a><span aria-hidden="true">›</span><span>めくる</span></nav>
       <div class="progress-line"><i id="cProg" style="width:0%"></i></div>
@@ -1327,6 +1735,14 @@
     const prog = view.querySelector('#cProg');
 
     function faces(it) {
+      if (it.qa) {
+        const u = it.qa;
+        return {
+          front: `<div class="fc-term fc-q">${esc(u.title)}</div>`,
+          back: `<div class="fc-def"><p class="fc-backterm">${esc(u.title)}</p><p><b>${inline(u.a)}</b></p><p class="hint" style="margin-top:.6em">くわしい解説は「${esc(sname(u.sid))}」の Q${u.no} で</p></div>`,
+          meta: `${sname(u.sid)} ・ Q${u.no}`
+        };
+      }
       if (it.person) {
         const p = it.person;
         return {
@@ -1362,8 +1778,8 @@
           </button>
         </div>
         <div class="fc-actions" style="margin-top:14px">
-          <button type="button" class="btn btn-ng" id="fcNo">${icon('x')}まだ<span class="kbd-hint">（←）</span></button>
-          <button type="button" class="btn btn-ok" id="fcYes">${icon('check')}覚えた<span class="kbd-hint">（→）</span></button>
+          <button type="button" class="btn btn-ng" id="fcNo">${icon('x')}${it.qa ? '言えなかった' : 'まだ'}<span class="kbd-hint">（←）</span></button>
+          <button type="button" class="btn btn-ok" id="fcYes">${icon('check')}${it.qa ? '言えた' : '覚えた'}<span class="kbd-hint">（→）</span></button>
         </div>`;
       const fc = stage.querySelector('#fc');
       fc.addEventListener('click', () => fc.classList.toggle('flipped'));
@@ -1373,6 +1789,7 @@
     function grade(ok) {
       const it = queue.shift();
       gradeCard(it.key, ok);
+      if (it.qa) gradeQA(it.qa, ok);
       if (!retried.has(it.key)) seen++;
       if (ok) known++;
       else if (!retried.has(it.key)) {
@@ -1481,6 +1898,10 @@
     }
     function finish() {
       prog.style.width = '100%';
+      S.st.orderBest = Math.max(st('orderBest'), score);
+      gainXP(score * 3);
+      progressMission('order');
+      settle();
       stage.innerHTML = `<div class="card result">
         <p class="eyebrow">RESULT</p>
         <div class="result-score">${score}<small> / ${ROUNDS}</small></div>
@@ -1497,6 +1918,163 @@
     return 'どっちが先？';
   }
 
+
+  /* =========================================================
+     一問一答（雑学）
+     ========================================================= */
+  function qaCard(u) {
+    const el = document.createElement('div');
+    el.className = 'card qa-mini';
+    el.dataset.s = u.sid;
+    el.innerHTML = `<p class="qhead"><span class="tag">${esc(sname(u.sid))} ・ Q${u.no}</span></p>
+      <p class="qa-q">${esc(u.title)}</p>
+      <button type="button" class="btn btn-sm btn-subject">答えを見る</button>
+      <div class="qa-a" hidden><p><b>${inline(u.a)}</b></p><a class="section-link" href="#learn.${u.key}">くわしい解説 →</a></div>`;
+    el.querySelector('button').addEventListener('click', (e) => {
+      e.currentTarget.hidden = true;
+      el.querySelector('.qa-a').hidden = false;
+    });
+    return el;
+  }
+  function viewQA(u) {
+    const m = META[u.sid];
+    const us = unitsOf(u.sid);
+    const prev = us[u.no - 2];
+    const next = us[u.no];
+    const { html } = renderMarkup(u.body);
+    const r = S.qa[u.key];
+    S.last = u.key;
+    save();
+    view.innerHTML = `<div class="page" data-s="${u.sid}">
+      <nav class="crumbs"><a href="#learn">学ぶ</a><span aria-hidden="true">›</span><a href="#learn.${u.sid}">${m.name}</a><span aria-hidden="true">›</span><span>Q${u.no}</span></nav>
+      <header class="lesson-head">
+        <p class="lesson-no"><span class="idx">${m.tag}</span>${m.name} Q${u.no}${r ? (r.ok ? '<span class="pill ok">前回：言えた</span>' : '<span class="pill ng">前回：もう一度</span>') : ''}</p>
+        <h1 class="lesson-title qa-title">${esc(u.title)}</h1>
+      </header>
+      <div class="card qa-prompt" id="qaPrompt">
+        <p>まず自分の言葉で答えてみる。声に出すと効果的です。</p>
+        <button type="button" class="btn btn-subject" id="qaReveal">答えを見る</button>
+      </div>
+      <section class="qa-body" id="qaBody" hidden>
+        <div class="callout point"><div class="callout-label">${icon('point')}答え</div><div class="qa-answer">${inline(u.a)}</div></div>
+        <article class="prose">${html}</article>
+        ${u.see && UNIT[u.see.replace(/^learn\./, '')] ? `<a class="card continue" href="#${u.see}" data-s="${UNIT[u.see.replace(/^learn\./, '')].sid}"><span class="idx">${META[UNIT[u.see.replace(/^learn\./, '')].sid].tag}</span><span class="continue-body"><span class="continue-title">${esc(UNIT[u.see.replace(/^learn\./, '')].title)}</span><span class="continue-sub">関連する講を読む</span></span>${icon('chevron')}</a>` : ''}
+        <div class="card done-box">
+          <p>答えられた？ 正直に。</p>
+          <div class="btn-row">
+            <button type="button" class="btn btn-sm btn-ng" id="qaNg">${icon('x')}言えなかった</button>
+            <button type="button" class="btn btn-sm btn-ok" id="qaOk">${icon('check')}言えた</button>
+          </div>
+        </div>
+      </section>
+      <nav class="pager">
+        ${prev ? `<a class="card" href="#learn.${prev.key}"><small>← Q${prev.no}</small><span>${esc(prev.title)}</span></a>` : ''}
+        ${next ? `<a class="card next" href="#learn.${next.key}"><small>Q${next.no} →</small><span>${esc(next.title)}</span></a>` : ''}
+      </nav>
+    </div>`;
+    const reveal = () => {
+      view.querySelector('#qaPrompt').hidden = true;
+      view.querySelector('#qaBody').hidden = false;
+      setSheetAvailable(true);
+    };
+    view.querySelector('#qaReveal').addEventListener('click', reveal);
+    const grade = (ok) => {
+      gradeQA(u, ok);
+      gradeCard('z:' + u.key, ok);
+      toast(ok ? 'いいね！ 記録しました' : '次は言えるように。あとでまた出します');
+      if (next) setTimeout(() => (location.hash = '#learn.' + next.key), 650);
+    };
+    view.querySelector('#qaOk').addEventListener('click', () => grade(true));
+    view.querySelector('#qaNg').addEventListener('click', () => grade(false));
+    keyHandler = (e) => {
+      if ((e.key === ' ' || e.key === 'Enter') && !view.querySelector('#qaPrompt').hidden) {
+        e.preventDefault();
+        reveal();
+      }
+    };
+    return u.title;
+  }
+
+  /* =========================================================
+     実績とごほうび
+     ========================================================= */
+  function viewAwards() {
+    const lv = levelOf(S.xp);
+    const lvPct = pct(S.xp - lvNeed(lv), lvNeed(lv + 1) - lvNeed(lv));
+    const nextTitle = LV_TITLES.find(([l]) => l > lv);
+    const mis = missions();
+    const got = ACH.filter((a) => S.ach[a.id]).length;
+    view.innerHTML = `<div class="page">
+      <nav class="crumbs"><a href="#practice">演習</a><span aria-hidden="true">›</span><span>実績とごほうび</span></nav>
+      <section class="card profile">
+        <div class="profile-badge">${badgeSVG({ kind: 'level', level: lv }, 84)}</div>
+        <div class="profile-body">
+          <p class="eyebrow">LEVEL</p>
+          <h1 class="profile-title">${titleOf(lv)}</h1>
+          <div class="bar lvbar"><i style="width:${lvPct}%"></i></div>
+          <p class="hint num">${S.xp} XP ・ 次のレベルまで ${lvNeed(lv + 1) - S.xp} XP${nextTitle ? `・Lv${nextTitle[0]}で「${nextTitle[1]}」` : ''}</p>
+        </div>
+        <div class="profile-gems">${gemSVG('gem gem-lg')}<b class="num">${S.gems}</b><span>宝石</span></div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2 class="section-title">今日のミッション ${mis.done ? '<span class="pill ok">達成</span>' : ''}</h2></div>
+        <div class="card missions">${mis.list
+          .map((x) => {
+            const d = missionDef(x.k);
+            return `<div class="mission${x.p >= d.goal ? ' done' : ''}"><span class="mission-check">${x.p >= d.goal ? icon('check') : ''}</span><span class="mission-name">${d.n}</span><span class="num mission-p">${x.p}/${d.goal}</span></div>`;
+          })
+          .join('')}</div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2 class="section-title">勲章 <span class="pill num">${Object.keys(S.medals).length}/${ALL_SUBJECTS.length}</span></h2><span class="hint">科目の講を全部読み、確認問題の8割に正解すると授与</span></div>
+        <div class="medals">${ALL_SUBJECTS.map(
+          (sid) => `<div class="medal-slot${S.medals[sid] ? '' : ' locked'}" data-s="${sid}" title="${esc(META[sid].name)}">${badgeSVG({ kind: 'medal', sid }, 56)}<span>${esc(META[sid].name)}</span></div>`
+        ).join('')}</div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2 class="section-title">実績メダル <span class="pill num">${got}/${ACH.length}</span></h2><span class="hint">銅は宝石1・銀は3・金は8</span></div>
+        <div class="achs">${ACH.map((a) => {
+          const on = !!S.ach[a.id];
+          const hidden = a.hidden && !on;
+          return `<div class="ach${on ? '' : ' locked'}">${badgeSVG({ kind: 'ach', tier: a.t, ic: hidden ? '？' : a.ic }, 46)}<div><b>${hidden ? '？？？' : esc(a.n)}</b><span>${hidden ? 'ひみつの実績' : esc(a.d)}</span></div></div>`;
+        }).join('')}</div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2 class="section-title">着せ替え</h2><span class="hint">宝石で交換。いつでも切り替えられます</span></div>
+        <div class="skins">${SKINS.map((k) => {
+          const own = (S.skins || []).includes(k.id);
+          const cur = (S.skin || 'default') === k.id;
+          return `<button type="button" class="skin${cur ? ' current' : ''}" data-skin="${k.id}" ${!own && S.gems < k.cost ? 'disabled' : ''}>
+            <span class="skin-sw" style="background:${k.sw.startsWith('--') ? `var(${k.sw})` : k.sw}"></span>
+            <b>${k.n}</b><span>${cur ? '使用中' : own ? '使う' : `${gemSVG()}${k.cost}`}</span></button>`;
+        }).join('')}</div>
+      </section>
+
+      <div class="btn-row"><a class="btn" href="#record">${icon('record')}学習記録</a><a class="btn btn-ghost" href="#settings">${icon('settings')}設定</a></div>
+    </div>`;
+    view.querySelectorAll('.skin').forEach((b) =>
+      b.addEventListener('click', () => {
+        const k = SKINS.find((x) => x.id === b.dataset.skin);
+        if (!(S.skins || []).includes(k.id)) {
+          if (S.gems < k.cost) return;
+          S.gems -= k.cost;
+          S.skins = (S.skins || ['default']).concat(k.id);
+          toast(`「${k.n}」と交換しました`);
+        }
+        S.skin = k.id;
+        save();
+        applyTheme();
+        updateLvChip();
+        viewAwards();
+      })
+    );
+    return '実績とごほうび';
+  }
+
   /* =========================================================
      学習記録
      ========================================================= */
@@ -1504,8 +2082,8 @@
     const rows = SUBJ().map((sid) => {
       const us = unitsOf(sid);
       const done = us.filter((u) => S.read[u.key]).length;
-      const acc = accuracyOf((id) => sidOfQ(id) === sid);
-      const keys = TERMS_BY_SID[sid].map((t) => t.key);
+      const acc = us[0] && us[0].qa ? { p: pct(us.filter((u) => S.qa[u.key] && S.qa[u.key].ok).length, us.length) } : accuracyOf((id) => sidOfQ(id) === sid);
+      const keys = us[0] && us[0].qa ? us.map((u) => 'z:' + u.key) : TERMS_BY_SID[sid].map((t) => t.key);
       const learned = keys.filter((k) => S.cards[k] && S.cards[k].b >= 3).length;
       return { sid, us, done, acc, learned, total: keys.length };
     });
@@ -1664,7 +2242,17 @@
         body.innerHTML = list.length ? `<div class="people">${list.map(personHTML).join('')}</div>` : '<p class="empty">該当する人物がいません。</p>';
         return;
       }
-      const list = TERMS.filter((t) => (dictPrefs.sid ? t.sid === dictPrefs.sid : inCourse(t.sid)) && (!q || norm(t.term + ' ' + t.def).includes(q)));
+      const qaGroups = {};
+      const qaItems = UNITS.filter((u) => u.qa && (dictPrefs.sid ? u.sid === dictPrefs.sid : inCourse(u.sid))).map((u) => ({
+        sid: u.sid,
+        unit: (qaGroups[u.sid] = qaGroups[u.sid] || { key: u.sid, sid: u.sid, no: 0, title: META[u.sid].name, qaGroup: true }),
+        term: u.title.replace(/\s*とは？$/, '').replace(/[？?]$/, ''),
+        def: u.a,
+        href: '#learn.' + u.key
+      }));
+      const list = TERMS.filter((t) => (dictPrefs.sid ? t.sid === dictPrefs.sid : inCourse(t.sid)))
+        .concat(qaItems)
+        .filter((t) => !q || norm(t.term + ' ' + t.def).includes(q));
       if (!list.length) {
         body.innerHTML = '<p class="empty">該当する用語がありません。</p>';
         return;
@@ -1678,8 +2266,10 @@
       body.innerHTML = `<div style="display:grid;gap:18px">${groups
         .map(
           (g) => `<section class="dict-group" data-s="${g.unit.sid}">
-          <h3><span class="tag">${sname(g.unit.sid)}</span><a href="#learn.${g.unit.key}">第${g.unit.no}講 ${esc(g.unit.title)}</a></h3>
-          <dl class="terms">${g.items.map((t) => `<div class="term"><dt><span class="k">${esc(t.term)}</span></dt><dd>${esc(t.def)}</dd></div>`).join('')}</dl>
+          <h3><span class="tag">${sname(g.unit.sid)}</span><a href="#learn.${g.unit.key}">${g.unit.qaGroup ? esc(g.unit.title) : `第${g.unit.no}講 ${esc(g.unit.title)}`}</a></h3>
+          <dl class="terms">${g.items
+            .map((t) => `<div class="term"><dt>${t.href ? `<a href="${t.href}" class="qa-link">` : ''}<span class="k">${esc(t.term)}</span>${t.href ? '</a>' : ''}</dt><dd>${esc(t.def)}</dd></div>`)
+            .join('')}</dl>
         </section>`
         )
         .join('')}</div>`;
@@ -1726,7 +2316,7 @@
     );
   }
   const UNIT_TEXT = {};
-  UNITS.forEach((u) => (UNIT_TEXT[u.key] = plain([u.lead, (u.points || []).join(' '), u.body].join(' '))));
+  UNITS.forEach((u) => (UNIT_TEXT[u.key] = plain([u.lead || '', (u.points || []).join(' '), u.a || '', u.body].join(' '))));
 
   function viewSearch() {
     view.innerHTML = `<div class="page">
@@ -1739,6 +2329,10 @@
     function run() {
       const q = norm(input.value.trim());
       lastQuery = input.value;
+      if (q && !st('search')) {
+        bump('search');
+        settle();
+      }
       if (!q) {
         out.innerHTML = `<p class="hint">講の本文、用語、人物、年表の出来事をまとめて探します。</p>`;
         return;
@@ -1927,6 +2521,16 @@
   applyTheme();
   buildChrome();
   route();
+  missions();
+  checkRewards();
+  /* これまでの学習でたまっていたごほうびは、まとめて1回だけお祝いする */
+  if (celebQueue.length > 2) {
+    const n = celebQueue.length;
+    const g = celebQueue.reduce((a, c) => a + (c.gems || 0), 0);
+    celebQueue.length = 0;
+    celebrate({ kind: 'ach', tier: 'g', ic: '賞', title: `ごほうびが ${n} 個届きました`, sub: 'これまでの学習ぶんの実績メダル・勲章などをまとめて受け取りました', gems: g });
+  }
+  settle();
 
   if (!window.LEARN_STANDALONE && 'serviceWorker' in navigator && /^https:$|^http:$/.test(location.protocol) && !/claude/.test(location.hostname)) {
     window.addEventListener('load', () => {
