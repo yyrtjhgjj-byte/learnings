@@ -88,7 +88,7 @@
      保存データ（localStorage。使えない環境でも落ちない）
      ========================================================= */
   const STORE_KEY = 'otona-shakai:v1';
-  const DEFAULTS = () => ({ read: {}, q: {}, cards: {}, days: [], last: null, sheet: false, theme: 'system', size: 'm', reverse: false, course: 'social', qa: {}, once: {}, xp: 0, gems: 0, ach: {}, medals: {}, st: {}, mis: null, skins: ['default'], skin: 'default' });
+  const DEFAULTS = () => ({ read: {}, q: {}, cards: {}, days: [], last: null, sheet: false, theme: 'system', size: 'm', reverse: false, course: 'social', qa: {}, once: {}, rev: {}, xp: 0, gems: 0, ach: {}, medals: {}, st: {}, mis: null, skins: ['default'], skin: 'default' });
   let S = DEFAULTS();
 
   function load() {
@@ -393,6 +393,38 @@
   const cardSid = (key) => (key.startsWith('p:') ? (PERSON_BY_KEY[key] || {}).s : key.startsWith('z:') ? key.slice(2).split('.')[0] : key.split(':')[0]);
 
   /* =========================================================
+     講の復習（忘却曲線）：読了→1日→3日→1週間→3週間→2か月→4か月
+     ========================================================= */
+  const REV_DAYS = [1, 3, 7, 21, 60, 120];
+  const REV_LABEL = ['1日後', '3日後', '1週間後', '3週間後', '2か月後', '4か月後'];
+  function scheduleReview(key, from = Date.now()) {
+    if (!S.rev[key]) S.rev[key] = { s: 0, d: from + REV_DAYS[0] * DAY - 3600000, n: 0 };
+  }
+  function dueReviews(onlyCourse) {
+    const now = Date.now();
+    return UNITS.filter((u) => !u.qa && S.rev[u.key] && S.rev[u.key].d <= now && (!onlyCourse || inCourse(u.sid))).sort((a, b) => S.rev[a.key].d - S.rev[b.key].d);
+  }
+  const fixedCount = () => Object.keys(S.rev).filter((k) => S.rev[k].s >= 5).length;
+  function finishReview(u, ok) {
+    const r = S.rev[u.key] || { s: 0, d: 0, n: 0 };
+    r.n++;
+    r.s = ok ? Math.min(r.s + 1, REV_DAYS.length - 1) : 0;
+    r.d = Date.now() + REV_DAYS[r.s] * DAY - 3600000;
+    r.last = ok ? 1 : 0;
+    S.rev[u.key] = r;
+    bump('reviews');
+    touchDay();
+    gainXP(ok ? 25 : 10);
+    progressMission('review');
+    settle();
+    return r;
+  }
+  const fmtDate = (t) => {
+    const d = new Date(t);
+    return `${d.getMonth() + 1}月${d.getDate()}日`;
+  };
+
+  /* =========================================================
      ごほうび：経験値・レベル・宝石・実績メダル・勲章・ミッション
      ========================================================= */
   const LV_TITLES = [[1, '入門者'], [3, '見習い'], [5, '物知り'], [8, '博識'], [12, '教養人'], [16, '賢者'], [20, '生き字引'], [25, '歩く百科事典'], [30, '知の巨人']];
@@ -455,7 +487,11 @@
     { id: 'search', n: '調べもの', d: '検索を使う', t: 'b', ic: '探', test: () => st('search') >= 1 },
     { id: 'night', n: '夜ふかし学者', d: '深夜0〜4時に学習する', t: 'b', ic: '夜', hidden: true, test: () => st('night') >= 1 },
     { id: 'early', n: '朝活', d: '朝5〜7時に学習する', t: 'b', ic: '朝', hidden: true, test: () => st('early') >= 1 },
-    { id: 'rich', n: '宝石商', d: '宝石を50個持つ', t: 's', ic: '宝', test: () => S.gems >= 50 }
+    { id: 'rich', n: '宝石商', d: '宝石を50個持つ', t: 's', ic: '宝', test: () => S.gems >= 50 },
+    { id: 'review1', n: '思い出す力', d: '講の復習を初めてこなす', t: 'b', ic: '復', test: () => st('reviews') >= 1 },
+    { id: 'review30', n: '復習の達人', d: '講の復習を30回こなす', t: 's', ic: '復', test: () => st('reviews') >= 30 },
+    { id: 'fixed1', n: '初定着', d: '2か月後の復習を通過した講が1つ', t: 's', ic: '定', test: () => fixedCount() >= 1 },
+    { id: 'fixed20', n: '忘れない頭', d: '定着した講が20', t: 'g', ic: '定', test: () => fixedCount() >= 20 }
   ];
   /* 勲章：その科目の講をすべて読了し、確認問題の8割以上に（直近で）正解。一問一答はすべて「言えた」 */
   function mastered(sid) {
@@ -472,13 +508,14 @@
     { k: 'correct', n: '7問正解する', goal: 7, lecture: true },
     { k: 'card', n: 'カードを15枚めくる', goal: 15, lecture: true },
     { k: 'qa', n: '「なぜ？」に3問答える', goal: 3, qa: true },
-    { k: 'order', n: '「どっちが先？」を1回遊ぶ', goal: 1 }
+    { k: 'order', n: '「どっちが先？」を1回遊ぶ', goal: 1 },
+    { k: 'review', n: '講を1つ復習する', goal: 1, lecture: true, needDue: true }
   ];
   const missionDef = (k) => MISSION_POOL.find((m) => m.k === k) || { n: k, goal: 1 };
   function missions() {
     const today = dayKey();
     if (!S.mis || S.mis.d !== today) {
-      const pool = MISSION_POOL.filter((m) => !(m.qa && !qaUnits().length) && !(m.lecture && !lectureUnits().length));
+      const pool = MISSION_POOL.filter((m) => !(m.qa && !qaUnits().length) && !(m.lecture && !lectureUnits().length) && !(m.needDue && !dueReviews().length));
       const pick = shuffle(pool, rng(hash('mission' + today))).slice(0, 3);
       S.mis = { d: today, list: pick.map((m) => ({ k: m.k, p: 0 })), done: false };
     }
@@ -699,7 +736,7 @@
     { r: 'timeline', label: '年表', ic: 'timeline' },
     { r: 'dict', label: '辞典', ic: 'dict' }
   ];
-  const NAV_GROUP = { quiz: 'practice', cards: 'practice', order: 'practice', record: 'practice', awards: 'practice', digest: 'learn' };
+  const NAV_GROUP = { quiz: 'practice', cards: 'practice', order: 'practice', record: 'practice', awards: 'practice', review: 'practice', digest: 'learn' };
 
   function buildChrome() {
     const C = COURSES[curCourse()];
@@ -802,7 +839,7 @@
   });
   document.addEventListener('click', (e) => {
     const k = e.target.closest('.k');
-    if (k && document.body.classList.contains('sheet-on')) k.classList.toggle('open');
+    if (k && (document.body.classList.contains('sheet-on') || k.closest('.sheet-local'))) k.classList.toggle('open');
   });
 
   /* テーマ */
@@ -876,6 +913,9 @@
         break;
       case 'order':
         title = viewOrder();
+        break;
+      case 'review':
+        title = viewReview(a, b);
         break;
       case 'awards':
         title = viewAwards();
@@ -1080,6 +1120,7 @@
     const unitWord = isQA ? '問' : '講';
     const dqa = isQA ? CU[Math.floor(r() * CU.length)] : null;
     const mis = missions();
+    const revs = isQA ? [] : dueReviews(true);
 
     view.innerHTML = `<div class="page">
       <section class="hero">
@@ -1094,6 +1135,22 @@
           <a class="stat stat-link" href="#awards"><b>Lv${lv}</b><span class="bar lvbar"><i style="width:${lvPct}%"></i></span><span>${titleOf(lv)}・${gemSVG()}${S.gems}</span></a>
         </div>
       </section>
+
+      ${
+        revs.length
+          ? `<section class="section">
+        <div class="section-head"><h2 class="section-title">今日の復習 <span class="pill pen num">${revs.length}講</span></h2><a class="section-link" href="#review">一覧 →</a></div>
+        <div class="card review-due">
+          <p>読んだ講が「忘れかけ」の時期です。要点を思い出して確認問題を解くだけ、1講2分ほど。</p>
+          <div class="chips">${revs
+            .slice(0, 4)
+            .map((u) => `<a class="chip" data-s="${u.sid}" href="#review.${u.key}"><span class="dot"></span>${esc(sname(u.sid))} 第${u.no}講</a>`)
+            .join('')}${revs.length > 4 ? `<span class="hint">ほか${revs.length - 4}講</span>` : ''}</div>
+          <div class="btn-row"><a class="btn btn-primary" href="#review.${revs[0].key}">復習を始める</a></div>
+        </div>
+      </section>`
+          : ''
+      }
 
       <section class="section">
         <div class="section-head"><h2 class="section-title">今日のミッション ${mis.done ? '<span class="pill ok">達成</span>' : ''}</h2><a class="section-link" href="#awards">実績とごほうび →</a></div>
@@ -1201,7 +1258,9 @@
     return `<a class="unit-row" data-s="${u.sid}" href="#learn.${u.key}">
       <span class="unit-no">第${u.no}講</span>
       <span class="unit-title">${esc(u.title)}</span>
-      <span class="unit-status">${S.read[u.key] ? '<span class="pill ok">読了</span>' : ''}${
+      <span class="unit-status">${
+        S.rev[u.key] && S.rev[u.key].s >= 5 ? '<span class="pill ok">定着</span>' : S.read[u.key] ? '<span class="pill ok">読了</span>' : ''
+      }${S.rev[u.key] && S.rev[u.key].d <= Date.now() ? '<span class="pill pen">復習</span>' : ''}${
         a.n ? `<span class="pill${a.c === a.n ? ' ok' : ''} num">${a.c}/${u.qItems.length}</span>` : ''
       }</span>
       <span class="unit-lead">${esc(plain(u.lead))}</span>
@@ -1289,7 +1348,7 @@
       }
 
       <div class="card done-box">
-        <p id="doneMsg">${S.read[u.key] ? 'この講は読了済みです。' : '読み終えたら記録しておきましょう。'}</p>
+        <p id="doneMsg">${S.read[u.key] ? (S.rev[u.key] ? (S.rev[u.key].s >= 5 ? '定着済み。' : '') + `次の復習は ${fmtDate(S.rev[u.key].d)} ごろです。` : 'この講は読了済みです。') : '読み終えたら記録しておきましょう。'}</p>
         <button type="button" class="btn btn-sm ${S.read[u.key] ? '' : 'btn-subject'}" id="doneBtn">${S.read[u.key] ? '未読に戻す' : '読了にする'}</button>
       </div>
 
@@ -1330,8 +1389,13 @@
 
     const doneBtn = view.querySelector('#doneBtn');
     function markRead(on) {
-      if (on) S.read[u.key] = Date.now();
-      else delete S.read[u.key];
+      if (on) {
+        S.read[u.key] = Date.now();
+        scheduleReview(u.key);
+      } else {
+        delete S.read[u.key];
+        delete S.rev[u.key];
+      }
       touchDay();
       if (on && !S.once[u.key]) {
         S.once[u.key] = 1;
@@ -1341,7 +1405,7 @@
       settle();
       doneBtn.textContent = on ? '未読に戻す' : '読了にする';
       doneBtn.classList.toggle('btn-subject', !on);
-      view.querySelector('#doneMsg').textContent = on ? 'この講は読了済みです。' : '読み終えたら記録しておきましょう。';
+      view.querySelector('#doneMsg').textContent = on ? `読了済み。次の復習は ${fmtDate(S.rev[u.key].d)} ごろです。` : '読み終えたら記録しておきましょう。';
     }
     doneBtn.addEventListener('click', () => {
       const on = !S.read[u.key];
@@ -1415,6 +1479,12 @@
           <h3>答える練習</h3>
           <p>「なぜ？」を見て、自分の言葉で答えてからめくる。「言えた」ものは間隔をあけて、また出てきます。</p>
           <span class="mode-foot num">${cQA}問${due ? `・今日の復習 ${due}問` : ''}</span>
+        </a>` : ''}
+        ${qTotal ? `<a class="card mode" href="#review">
+          <span class="mode-icon">${icon('redo')}</span>
+          <h3>講の復習</h3>
+          <p>読了した講を、1日後・3日後・1週間後・3週間後・2か月後に思い出す。2か月後を越えたら「定着」。</p>
+          <span class="mode-foot num">今日 ${dueReviews(true).length}講・定着 ${fixedCount()}講</span>
         </a>` : ''}
         ${qTotal ? `<a class="card mode" href="#quiz">
           <span class="mode-icon">${icon('quiz')}</span>
@@ -1995,6 +2065,98 @@
     return u.title;
   }
 
+
+  /* =========================================================
+     講の復習
+     ========================================================= */
+  function viewReview(a, b) {
+    const u = a && b ? UNIT[`${a}.${b}`] : null;
+    if (!u || u.qa) {
+      const due = dueReviews(true);
+      const later = UNITS.filter((x) => !x.qa && inCourse(x.sid) && S.rev[x.key] && S.rev[x.key].d > Date.now()).sort((x, y) => S.rev[x.key].d - S.rev[y.key].d);
+      view.innerHTML = `<div class="page">
+        <nav class="crumbs"><a href="#practice">演習</a><span aria-hidden="true">›</span><span>講の復習</span></nav>
+        <header class="lesson-head"><p class="eyebrow">REVIEW</p><h1 class="lesson-title">講の復習</h1>
+          <p class="lesson-lead">読了した講を、忘れかけたころにもう一度。1日後→3日後→1週間後→3週間後→2か月後→4か月後。確認問題の8割に正解すると次の間隔へ進み、崩れたら1日後からやり直し。2か月後の復習を越えた講は「定着」です。</p></header>
+        <section class="section"><div class="section-head"><h2 class="section-title">今日の復習 <span class="pill pen num">${due.length}</span></h2></div>
+          ${due.length ? `<div class="units">${due.map(revRow).join('')}</div><div class="btn-row"><a class="btn btn-primary" href="#review.${due[0].key}">順番に始める</a></div>` : '<p class="empty">今日復習する講はありません。講を読了すると、翌日から復習が始まります。</p>'}
+        </section>
+        ${later.length ? `<section class="section"><div class="section-head"><h2 class="section-title">これからの予定</h2><span class="hint">定着 ${fixedCount()}講</span></div><div class="units">${later.slice(0, 30).map(revRow).join('')}</div></section>` : ''}
+      </div>`;
+      return '講の復習';
+    }
+    const m = META[u.sid];
+    const r0 = S.rev[u.key];
+    const qs = shuffle(u.qItems).slice(0, 5);
+    view.innerHTML = `<div class="page" data-s="${u.sid}">
+      <nav class="crumbs"><a href="#review">講の復習</a><span aria-hidden="true">›</span><span>${esc(m.name)} 第${u.no}講</span></nav>
+      <header class="lesson-head">
+        <p class="lesson-no"><span class="idx">${m.tag}</span>${esc(m.name)} 第${u.no}講 の復習${r0 ? `<span class="pill">${REV_LABEL[r0.s]}の回</span>` : ''}</p>
+        <h1 class="lesson-title">${esc(u.title)}</h1>
+      </header>
+      <section class="section" id="revStep1">
+        <div class="section-head"><h2 class="section-title">1. 要点を思い出す</h2><span class="hint">赤い帯をタップでめくる</span></div>
+        <div class="points sheet-local"><ol>${(u.points || []).map((p) => `<li><span>${inline(p)}</span></li>`).join('')}</ol></div>
+        <div class="btn-row"><button type="button" class="btn btn-subject" id="revNext">思い出した → 確認問題へ</button><a class="btn btn-ghost" href="#learn.${u.key}">講を読み直す</a></div>
+      </section>
+      <section class="section" id="revStep2" hidden>
+        <div class="section-head"><h2 class="section-title">2. 確認問題 <span class="pill num">${qs.length}</span></h2><span class="hint">8割できたら次の間隔へ</span></div>
+        <div class="review-list" id="revQs"></div>
+      </section>
+      <div id="revResult"></div>
+    </div>`;
+    view.querySelector('#revNext').addEventListener('click', () => {
+      view.querySelectorAll('#revStep1 .k').forEach((k) => k.classList.add('open'));
+      view.querySelector('#revNext').parentElement.hidden = true;
+      view.querySelector('#revStep2').hidden = false;
+      view.querySelector('#revStep2').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    let answered = 0;
+    let correct = 0;
+    const box = view.querySelector('#revQs');
+    qs.forEach((q, i) =>
+      box.appendChild(
+        makeQuestion(q, {
+          label: `${i + 1} / ${qs.length}`,
+          link: false,
+          onAnswer: (ok) => {
+            answered++;
+            if (ok) correct++;
+            if (answered === qs.length) done();
+          }
+        })
+      )
+    );
+    function done() {
+      const pass = correct >= Math.ceil(qs.length * 0.8);
+      const r = finishReview(u, pass);
+      const nextDue = dueReviews(true).find((x) => x.key !== u.key);
+      view.querySelector('#revResult').innerHTML = `<div class="card result" style="margin-top:20px">
+        <p class="eyebrow">${pass ? 'CLEAR' : 'RETRY'}</p>
+        <div class="result-score">${correct}<small> / ${qs.length}</small></div>
+        <p class="result-msg">${pass ? (r.s >= 5 ? 'この講は定着しました。' : '記憶が一段深くなりました。') : '少し霧散していました。明日もう一度。'}</p>
+        <p class="hint">次の復習は ${fmtDate(r.d)} ごろ（${REV_LABEL[r.s]}）</p>
+        <div class="btn-row" style="justify-content:center">
+          ${nextDue ? `<a class="btn btn-primary" href="#review.${nextDue.key}">次の復習へ</a>` : ''}
+          ${pass ? '' : `<a class="btn" href="#learn.${u.key}">講を読み直す</a>`}
+          <a class="btn btn-ghost" href="#review">一覧</a>
+        </div>
+      </div>`;
+      view.querySelector('#revResult').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    return `復習：${u.title}`;
+  }
+  function revRow(u) {
+    const r = S.rev[u.key];
+    const due = r.d <= Date.now();
+    return `<a class="unit-row" data-s="${u.sid}" href="#review.${u.key}">
+      <span class="unit-no">第${u.no}講</span>
+      <span class="unit-title">${esc(u.title)}</span>
+      <span class="unit-status">${r.s >= 5 ? '<span class="pill ok">定着</span>' : ''}<span class="pill${due ? ' pen' : ''} num">${due ? '今日' : fmtDate(r.d)}</span></span>
+      <span class="unit-lead">${esc(sname(u.sid))}・${REV_LABEL[r.s]}の回${r.n ? `・これまで${r.n}回` : ''}</span>
+    </a>`;
+  }
+
   /* =========================================================
      実績とごほうび
      ========================================================= */
@@ -2520,6 +2682,9 @@
   load();
   applyTheme();
   buildChrome();
+  UNITS.forEach((u) => {
+    if (!u.qa && S.read[u.key] && !S.rev[u.key]) scheduleReview(u.key, S.read[u.key]);
+  });
   route();
   missions();
   checkRewards();

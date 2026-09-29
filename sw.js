@@ -3,7 +3,7 @@
  * 自分のファイルは「キャッシュを先に返し、裏で最新を取りに行く」。
  * コンテンツを大きく変えたら VERSION を上げると古いキャッシュが消える。
  */
-const VERSION = 'v7';
+const VERSION = 'v8';
 const CACHE = 'otona-shakai-' + VERSION;
 const FONT_CACHE = 'otona-shakai-fonts';
 

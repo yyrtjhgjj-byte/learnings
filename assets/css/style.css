@@ -550,7 +550,8 @@ main#view {
   border-radius: 2px;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
-.sheet-on .k:not(.open) {
+.sheet-on .k:not(.open),
+.sheet-local .k:not(.open) {
   color: transparent;
   background: color-mix(in srgb, var(--sheet) 88%, transparent);
   cursor: pointer;
@@ -558,7 +559,8 @@ main#view {
   -webkit-user-select: none;
   user-select: none;
 }
-.sheet-on .k:not(.open) * { color: transparent; }
+.sheet-on .k:not(.open) *,
+.sheet-local .k:not(.open) * { color: transparent; }
 .sheet-on .k.open {
   background: color-mix(in srgb, var(--sheet) 12%, transparent);
   cursor: pointer;
@@ -1527,3 +1529,8 @@ textarea.io {
 .fc-q { font-size: clamp(1.3rem, 5.5vw, 1.8rem); }
 .qa-digest p { line-height: 1.8; }
 .qa-link { text-decoration: none; color: inherit; }
+
+/* ---------- 講の復習 ---------- */
+.review-due { padding: 16px 18px; display: grid; gap: 12px; }
+.review-due p { font-size: 0.9rem; color: var(--ink-2); line-height: 1.7; }
+.review-due .chip { text-decoration: none; }
