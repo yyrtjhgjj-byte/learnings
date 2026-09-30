@@ -88,7 +88,7 @@
      保存データ（localStorage。使えない環境でも落ちない）
      ========================================================= */
   const STORE_KEY = 'otona-shakai:v1';
-  const DEFAULTS = () => ({ read: {}, q: {}, cards: {}, days: [], last: null, sheet: false, theme: 'system', size: 'm', reverse: false, course: 'social', qa: {}, once: {}, rev: {}, xp: 0, gems: 0, ach: {}, medals: {}, st: {}, mis: null, skins: ['default'], skin: 'default' });
+  const DEFAULTS = () => ({ read: {}, q: {}, cards: {}, days: [], last: null, sheet: false, theme: 'system', size: 'm', reverse: false, course: 'social', lastBy: {}, qa: {}, once: {}, rev: {}, xp: 0, gems: 0, ach: {}, medals: {}, st: {}, mis: null, skins: ['default'], skin: 'default' });
   let S = DEFAULTS();
 
   function load() {
@@ -1094,16 +1094,19 @@
     const done = CU.filter((u) => S.read[u.key]).length;
     const acc = accuracyOf((id) => inCourse(sidOfQ(id)));
     /* 続きから：最後に開いた講。読了済みなら同じ科目の次の講、まだ何も開いていなければ最初の講 */
-    let last = S.last && UNIT[S.last] && inCourse(UNIT[S.last].sid) ? UNIT[S.last] : null;
+    /* 続きから：このコースで最後に開いた講（記録がなければ最後に読了した講）。
+       読了済みなら同じ科目のまだ読んでいない次の講、なければコース内の未読の講 */
+    const lk = S.lastBy[curCourse()] || (S.last && UNIT[S.last] && inCourse(UNIT[S.last].sid) ? S.last : null);
+    let last = lk && UNIT[lk] ? UNIT[lk] : CU.filter((u) => S.read[u.key]).sort((a, b) => S.read[b.key] - S.read[a.key])[0] || null;
     let lastLabel = '続きから';
     if (last && S.read[last.key]) {
-      const nx = unitsOf(last.sid)[last.no] || CU.find((u) => !S.read[u.key]);
+      const nx = unitsOf(last.sid).slice(last.no).find((u) => !S.read[u.key]) || CU.find((u) => !S.read[u.key]);
       if (nx) {
         last = nx;
         lastLabel = '次に読む';
       }
     } else if (!last && CU.length) {
-      last = CU[0];
+      last = CU.find((u) => !S.read[u.key]) || CU[0];
       lastLabel = 'まずはここから';
     }
     const r = rng(hash(dayKey()));
@@ -1308,6 +1311,7 @@
     const next = us[u.no];
     const { html, secs } = renderMarkup(u.body);
     S.last = u.key;
+    S.lastBy[courseOf(u.sid)] = u.key;
     save();
 
     view.innerHTML = `<div class="readbar" data-s="${u.sid}" aria-hidden="true"><i id="readbar"></i></div>
@@ -2014,6 +2018,7 @@
     const { html } = renderMarkup(u.body);
     const r = S.qa[u.key];
     S.last = u.key;
+    S.lastBy[courseOf(u.sid)] = u.key;
     save();
     view.innerHTML = `<div class="page" data-s="${u.sid}">
       <nav class="crumbs"><a href="#learn">学ぶ</a><span aria-hidden="true">›</span><a href="#learn.${u.sid}">${m.name}</a><span aria-hidden="true">›</span><span>Q${u.no}</span></nav>
