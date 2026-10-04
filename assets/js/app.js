@@ -88,7 +88,7 @@
      保存データ（localStorage。使えない環境でも落ちない）
      ========================================================= */
   const STORE_KEY = 'otona-shakai:v1';
-  const DEFAULTS = () => ({ read: {}, q: {}, cards: {}, days: [], last: null, sheet: false, theme: 'system', size: 'm', reverse: false, course: 'social', lastBy: {}, qa: {}, once: {}, rev: {}, xp: 0, gems: 0, ach: {}, medals: {}, st: {}, mis: null, skins: ['default'], skin: 'default' });
+  const DEFAULTS = () => ({ read: {}, q: {}, cards: {}, days: [], last: null, sheet: false, theme: 'system', size: 'm', reverse: false, course: 'social', lastBy: {}, qa: {}, once: {}, rev: {}, xp: 0, gems: 0, ach: {}, medals: {}, st: {}, mis: null, skins: ['default'], skin: 'default', sfx: true, fx: 'full', chests: [] });
   let S = DEFAULTS();
 
   function load() {
@@ -114,7 +114,11 @@
     if (!S.days.includes(k)) {
       S.days.push(k);
       if (S.days.length > 400) S.days = S.days.slice(-400);
-      if (typeof gainXP === 'function') gainXP(15);
+      /* その日はじめての学習：連続日数に応じたボーナス */
+      const n = streak();
+      const bonus = 10 + 5 * Math.min(n, 10);
+      gainXP(bonus);
+      if (n >= 2) celebrate({ kind: 'streak', n, title: `${n}日連続！`, sub: n >= 7 ? '学ぶことが習慣になってきました' : '今日も学習スタート。連続記録を更新しました', xp: bonus });
     }
     const h = new Date().getHours();
     if (h < 4) S.st.night = 1;
@@ -344,6 +348,9 @@
     return { n, c, p: n ? Math.round((c / n) * 100) : null };
   }
   const sidOfQ = (id) => (id.startsWith('k:') ? id.slice(2).split(':')[0] : id.split('.')[0]);
+  /* コンボ：連続正解でXP倍率アップ（5連続で×1.5、10連続でフィーバー×2）。画面を移ると0に戻る */
+  let combo = 0;
+  const comboMult = (c) => (c >= 10 ? 2 : c >= 5 ? 1.5 : 1);
   function recordAnswer(id, ok) {
     const s = S.q[id] || { n: 0, c: 0 };
     s.n++;
@@ -353,10 +360,19 @@
     S.q[id] = s;
     touchDay();
     bump('answered');
-    if (ok) bump('correct');
-    gainXP(ok ? 10 : 2);
+    combo = ok ? combo + 1 : 0;
+    if (combo > st('bestCombo')) S.st.bestCombo = combo;
+    let xp = ok ? Math.round(10 * comboMult(combo)) : 2;
+    let lucky = null;
+    if (ok) {
+      bump('correct');
+      lucky = rollLucky(0.08);
+      if (lucky === 'xp') xp *= 3;
+    }
+    gainXP(xp);
     progressMission('quiz');
     if (ok) progressMission('correct');
+    fxAnswer(ok, lucky);
     settle();
   }
   function weakIds(sids) {
@@ -381,7 +397,9 @@
     if (!key.startsWith('z:')) {
       if (ok) bump('known');
       if (ok && st.b === 5 && before < 5) bump('mastered');
-      gainXP(ok ? 4 : 1);
+      const lucky = ok ? rollLucky(0.04) : null;
+      gainXP((ok ? 4 : 1) * (lucky === 'xp' ? 3 : 1));
+      if (lucky) fxLucky(lucky);
       progressMission('card');
     }
     settle();
@@ -456,9 +474,9 @@
     { id: 'q1', n: '初正解', d: '問題に1問正解する', t: 'b', ic: '問', test: () => st('correct') >= 1 },
     { id: 'q100', n: '百問斬り', d: '累計100問正解する', t: 's', ic: '問', test: () => st('correct') >= 100 },
     { id: 'q500', n: '五百問斬り', d: '累計500問正解する', t: 'g', ic: '問', test: () => st('correct') >= 500 },
-    { id: 'combo5', n: '波に乗る', d: 'クイズで5問連続正解', t: 'b', ic: '連', test: () => st('bestCombo') >= 5 },
-    { id: 'combo10', n: '絶好調', d: 'クイズで10問連続正解', t: 's', ic: '連', test: () => st('bestCombo') >= 10 },
-    { id: 'combo20', n: '無双', d: 'クイズで20問連続正解', t: 'g', ic: '連', test: () => st('bestCombo') >= 20 },
+    { id: 'combo5', n: '波に乗る', d: '5問連続正解', t: 'b', ic: '連', test: () => st('bestCombo') >= 5 },
+    { id: 'combo10', n: '絶好調', d: '10問連続正解（フィーバー）', t: 's', ic: '連', test: () => st('bestCombo') >= 10 },
+    { id: 'combo20', n: '無双', d: '20問連続正解', t: 'g', ic: '連', test: () => st('bestCombo') >= 20 },
     { id: 'perfect', n: '満点', d: '10問以上のクイズで全問正解', t: 's', ic: '満', test: () => st('perfect') >= 1 },
     { id: 'perfect5', n: '満点常連', d: '満点を5回とる', t: 'g', ic: '満', test: () => st('perfect') >= 5 },
     { id: 'card50', n: '暗記の芽', d: 'カードで「覚えた」を50回', t: 'b', ic: '札', test: () => st('known') >= 50 },
@@ -491,7 +509,11 @@
     { id: 'review1', n: '思い出す力', d: '講の復習を初めてこなす', t: 'b', ic: '復', test: () => st('reviews') >= 1 },
     { id: 'review30', n: '復習の達人', d: '講の復習を30回こなす', t: 's', ic: '復', test: () => st('reviews') >= 30 },
     { id: 'fixed1', n: '初定着', d: '2か月後の復習を通過した講が1つ', t: 's', ic: '定', test: () => fixedCount() >= 1 },
-    { id: 'fixed20', n: '忘れない頭', d: '定着した講が20', t: 'g', ic: '定', test: () => fixedCount() >= 20 }
+    { id: 'fixed20', n: '忘れない頭', d: '定着した講が20', t: 'g', ic: '定', test: () => fixedCount() >= 20 },
+    { id: 'chest10', n: '宝探し', d: '宝箱を10個開ける', t: 'b', ic: '箱', test: () => st('chests') >= 10 },
+    { id: 'chest100', n: 'トレジャーハンター', d: '宝箱を100個開ける', t: 's', ic: '箱', test: () => st('chests') >= 100 },
+    { id: 'jackpot', n: '大当たり', d: '宝箱で大当たりを引く', t: 's', ic: '当', hidden: true, test: () => st('jackpot') >= 1 },
+    { id: 'lucky', n: '幸運', d: 'ラッキーボーナスを引く', t: 'b', ic: '幸', hidden: true, test: () => st('lucky') >= 1 }
   ];
   /* 勲章：その科目の講をすべて読了し、確認問題の8割以上に（直近で）正解。一問一答はすべて「言えた」 */
   function mastered(sid) {
@@ -524,7 +546,16 @@
   function progressMission(k, n = 1) {
     const m = missions();
     m.list.forEach((x) => {
-      if (x.k === k) x.p = Math.min(missionDef(k).goal, x.p + n);
+      if (x.k !== k) return;
+      const goal = missionDef(k).goal;
+      const was = x.p;
+      x.p = Math.min(goal, x.p + n);
+      const cleared = m.list.filter((y) => y.p >= missionDef(y.k).goal).length;
+      if (was < goal && x.p >= goal && cleared < m.list.length)
+        setTimeout(() => {
+          SFX.coin();
+          toast(`ミッションクリア！ ${missionDef(k).n}（${cleared}/${m.list.length}）`);
+        }, 450);
     });
     if (!m.done && m.list.every((x) => x.p >= missionDef(x.k).goal)) {
       m.done = true;
@@ -537,6 +568,7 @@
   function gainXP(n) {
     const before = levelOf(S.xp);
     S.xp += n;
+    pendXP += n;
     const after = levelOf(S.xp);
     if (after > before) {
       S.gems += 2 * (after - before);
@@ -570,18 +602,358 @@
   function settle() {
     checkRewards();
     save();
+    flushFx();
     flushCelebrations();
     updateLvChip();
   }
 
-  /* お祝いの演出 */
+  /* =========================================================
+     演出：効果音・振動・飛び出す数字・コンボ・宝箱・お祝い
+     ========================================================= */
+  const calm = () => S.fx === 'calm' || !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+
+  /* 効果音：音源ファイルは使わず Web Audio で合成する */
+  let actx = null;
+  function audio() {
+    if (!S.sfx) return null;
+    try {
+      if (!actx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        try {
+          if (navigator.audioSession) navigator.audioSession.type = 'ambient';
+        } catch (e) {
+          /* noop */
+        }
+        actx = new AC();
+      }
+      if (actx.state === 'suspended') actx.resume();
+      return actx;
+    } catch (e) {
+      return null;
+    }
+  }
+  /* notes: [周波数, 開始(秒), 長さ(秒), 波形, 音量, 終わりの周波数] */
+  function tone(notes, vol = 0.2) {
+    const ac = audio();
+    if (!ac) return;
+    try {
+      const t0 = ac.currentTime + 0.01;
+      const master = ac.createGain();
+      master.gain.value = vol;
+      master.connect(ac.destination);
+      notes.forEach(([f, at, dur, type = 'triangle', v = 1, f2]) => {
+        const o = ac.createOscillator();
+        const g = ac.createGain();
+        o.type = type;
+        o.frequency.setValueAtTime(f, t0 + at);
+        if (f2) o.frequency.exponentialRampToValueAtTime(f2, t0 + at + dur);
+        g.gain.setValueAtTime(0.0001, t0 + at);
+        g.gain.exponentialRampToValueAtTime(v, t0 + at + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + dur);
+        o.connect(g);
+        g.connect(master);
+        o.start(t0 + at);
+        o.stop(t0 + at + dur + 0.05);
+      });
+    } catch (e) {
+      /* noop */
+    }
+  }
+  const NT = (m) => 440 * Math.pow(2, (m - 69) / 12);
+  const arp = (ms, gap, dur, type = 'triangle', v = 0.9, from = 0) => ms.map((m, i) => [NT(m), from + i * gap, dur, type, v]);
+  const SFX = {
+    tap: () => tone([[NT(86), 0, 0.04, 'sine', 0.4]], 0.15),
+    flip: () => tone([[NT(74), 0, 0.09, 'sine', 0.5, NT(86)]], 0.15),
+    correct: (c = 1) => {
+      const b = 72 + Math.min(Math.max(c - 1, 0), 12);
+      tone([[NT(b), 0, 0.11, 'triangle', 0.9], [NT(b + 7), 0.07, 0.24, 'triangle', 0.9], [NT(b + 19), 0.07, 0.3, 'sine', 0.25]]);
+    },
+    wrong: () => tone([[NT(50), 0, 0.16, 'sawtooth', 0.35, NT(46)], [NT(45), 0.13, 0.26, 'sawtooth', 0.3, NT(40)]], 0.12),
+    known: () => tone([[NT(81), 0, 0.08, 'sine', 0.7], [NT(88), 0.06, 0.16, 'sine', 0.6]]),
+    later: () => tone([[NT(64), 0, 0.12, 'sine', 0.5, NT(59)]], 0.16),
+    coin: () => tone([[NT(88), 0, 0.07, 'square', 0.3], [NT(93), 0.06, 0.22, 'square', 0.3]], 0.12),
+    tick: () => tone([[NT(96), 0, 0.03, 'sine', 0.3]], 0.1),
+    star: (i = 0) => tone([[NT(84 + i * 4), 0, 0.3, 'triangle', 0.8], [NT(96 + i * 4), 0, 0.4, 'sine', 0.3]]),
+    combo: (c) => {
+      const b = 76 + Math.min(c, 20) / 2;
+      tone(arp([b, b + 4, b + 7, b + 12], 0.055, 0.18, 'square', 0.35), 0.16);
+    },
+    lucky: () => tone(arp([96, 100, 103, 108, 103, 108], 0.05, 0.16, 'sine', 0.6), 0.2),
+    stamp: () => tone([[130, 0, 0.18, 'sine', 1, 50], [NT(84), 0.14, 0.18, 'triangle', 0.6], [NT(91), 0.22, 0.32, 'triangle', 0.6]], 0.3),
+    fanfare: (big) => {
+      const ms = big ? [67, 72, 76, 79, 84, 88] : [72, 76, 79, 84];
+      const gap = big ? 0.085 : 0.09;
+      const end = ms.length * gap;
+      tone(arp(ms, gap, 0.28).concat([[NT(84), end, big ? 1.1 : 0.6, 'triangle', 0.7], [NT(88), end, big ? 1.1 : 0.6, 'triangle', 0.5], [NT(91), end, big ? 1.1 : 0.6, 'sine', 0.5]]));
+    },
+    shake: () => tone([0, 0.3, 0.6].flatMap((t) => [[NT(45), t, 0.07, 'square', 0.35], [NT(49), t + 0.1, 0.07, 'square', 0.3]]), 0.12),
+    open: (big) => tone([[220, 0, 0.35, 'sawtooth', 0.15, 1400]].concat(arp(big ? [84, 88, 91, 96, 100, 103, 108] : [84, 88, 91, 96, 100], 0.06, 0.3, 'sine', 0.7, 0.18)), 0.22)
+  };
+  function buzz(pattern) {
+    if (calm() || !navigator.vibrate) return;
+    try {
+      navigator.vibrate(pattern);
+    } catch (e) {
+      /* noop */
+    }
+  }
+  /* iOS などは、最初のタップで音を使えるようにしておく */
+  document.addEventListener(
+    'pointerdown',
+    () => {
+      if (S.sfx) audio();
+    },
+    { once: true, capture: true }
+  );
+
+  /* 最後にタップした位置：飛び出す数字の出どころ */
+  let lastPt = null;
+  document.addEventListener('pointerdown', (e) => (lastPt = { x: e.clientX, y: e.clientY, t: Date.now() }), true);
+  function originPt(el) {
+    if (el && el.getBoundingClientRect) {
+      const r = el.getBoundingClientRect();
+      if (r.width) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }
+    if (lastPt && Date.now() - lastPt.t < 4000) return lastPt;
+    return { x: window.innerWidth / 2, y: window.innerHeight * 0.45 };
+  }
+  function fxLayer() {
+    let l = document.getElementById('fxLayer');
+    if (!l) {
+      l = document.createElement('div');
+      l.id = 'fxLayer';
+      l.className = 'fx-layer';
+      l.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(l);
+    }
+    return l;
+  }
+  function floatText(html, pt, cls = '') {
+    if (calm()) return;
+    const el = document.createElement('div');
+    el.className = 'fx-float ' + cls;
+    el.innerHTML = html;
+    el.style.left = Math.min(Math.max(pt.x, 56), window.innerWidth - 56) + 'px';
+    el.style.top = Math.max(pt.y, 70) + 'px';
+    fxLayer().appendChild(el);
+    setTimeout(() => el.remove(), 1400);
+  }
+  /* 粒が飛び散る */
+  function burst(pt, { n = 10, color = 'var(--ok)', dist = 48, html = '' } = {}) {
+    if (calm()) return;
+    const layer = fxLayer();
+    for (let i = 0; i < n; i++) {
+      const p = document.createElement('i');
+      p.className = 'fx-p' + (html ? ' fx-p-html' : '');
+      if (html) p.innerHTML = html;
+      const a = (Math.PI * 2 * i) / n + Math.random() * 0.6;
+      const d = dist * (0.65 + Math.random() * 0.7);
+      p.style.cssText = `left:${pt.x}px;top:${pt.y}px;--dx:${(Math.cos(a) * d).toFixed(1)}px;--dy:${(Math.sin(a) * d).toFixed(1)}px;--c:${color}`;
+      layer.appendChild(p);
+      setTimeout(() => p.remove(), 900);
+    }
+  }
+  /* 画面中央に大きく出る文字（コンボなど） */
+  function splash(big, small, cls = '') {
+    if (calm()) return;
+    const layer = fxLayer();
+    layer.querySelectorAll('.fx-splash').forEach((x) => x.remove());
+    const el = document.createElement('div');
+    el.className = 'fx-splash ' + cls;
+    el.innerHTML = `<b>${big}</b>${small ? `<span>${small}</span>` : ''}`;
+    layer.appendChild(el);
+    setTimeout(() => el.remove(), 1300);
+  }
+  function jolt(el, cls = 'fx-jolt') {
+    if (calm() || !el) return;
+    el.classList.remove(cls);
+    void el.offsetWidth;
+    el.classList.add(cls);
+  }
+  /* 数字をパラパラ増やす */
+  function countUp(el, from, to, ms = 600, prefix = '', delay = 0, onTick) {
+    if (!el) return;
+    if (calm() || from === to) {
+      el.textContent = prefix + to;
+      return;
+    }
+    el.textContent = prefix + from;
+    const t0 = performance.now() + delay;
+    let shown = from;
+    const frame = (t) => {
+      const k = Math.min(1, Math.max(0, (t - t0) / ms));
+      const v = Math.round(from + (to - from) * (1 - Math.pow(1 - k, 3)));
+      if (v !== shown) {
+        shown = v;
+        el.textContent = prefix + v;
+        if (onTick) onTick(v);
+      }
+      if (k < 1) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }
+  /* 粒をレベル表示まで飛ばす */
+  function flyToChip(pt, html, cls = '') {
+    const chip = document.getElementById('lvchip');
+    if (calm() || !chip || !chip.offsetParent || !chip.animate) return;
+    const r = chip.getBoundingClientRect();
+    const el = document.createElement('div');
+    el.className = 'fx-orb ' + cls;
+    el.innerHTML = html;
+    el.style.left = pt.x + 'px';
+    el.style.top = pt.y + 'px';
+    fxLayer().appendChild(el);
+    const dx = r.left + r.width * (cls === 'gem' ? 0.75 : 0.25) - pt.x;
+    const dy = r.top + r.height / 2 - pt.y;
+    const a = el.animate(
+      [
+        { transform: 'translate(-50%,-50%) scale(0.4)', opacity: 0 },
+        { transform: `translate(calc(-50% + ${dx * 0.15}px), calc(-50% - 36px)) scale(1.2)`, opacity: 1, offset: 0.3 },
+        { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) scale(0.5)`, opacity: 0.7 }
+      ],
+      { duration: 820, easing: 'cubic-bezier(.45,0,.7,.2)', delay: 120, fill: 'both' }
+    );
+    a.onfinish = () => {
+      el.remove();
+      jolt(chip, 'bump');
+    };
+  }
+
+  /* 操作ごとにたまった経験値を、タップした所から飛ばす */
+  let pendXP = 0;
+  function flushFx() {
+    if (pendXP > 0) {
+      const pt = originPt();
+      floatText(`+${pendXP}<small>XP</small>`, pt, 'xp');
+      flyToChip(pt, '', 'xp');
+      if (!calm()) fxBusyUntil = Math.max(fxBusyUntil, Date.now() + 550);
+    }
+    pendXP = 0;
+  }
+  function rollLucky(p) {
+    if (Math.random() >= p) return null;
+    bump('lucky');
+    if (Math.random() < 0.5) {
+      S.gems += 1;
+      return 'gem';
+    }
+    return 'xp';
+  }
+  function fxLucky(kind) {
+    const pt = originPt();
+    setTimeout(() => {
+      SFX.lucky();
+      buzz([15, 30, 15]);
+      floatText(kind === 'gem' ? `LUCKY! ${gemSVG()}+1` : 'LUCKY! XP×3', { x: pt.x, y: pt.y - 34 }, 'lucky');
+      burst(pt, { n: 12, color: 'var(--gold)', dist: 64 });
+      if (kind === 'gem') flyToChip(pt, gemSVG(), 'gem');
+    }, 280);
+  }
+  const COMBO_AT = [3, 5, 10, 15, 20, 30, 40, 50];
+  function fxAnswer(ok, lucky) {
+    if (ok) {
+      SFX.correct(combo);
+      buzz(12);
+      if (COMBO_AT.includes(combo) || (combo > 50 && combo % 10 === 0)) {
+        if (!calm()) fxBusyUntil = Math.max(fxBusyUntil, Date.now() + 1350);
+        setTimeout(() => {
+          SFX.combo(combo);
+          splash(`${combo}<small>COMBO</small>`, combo >= 10 ? 'FEVER！ XP×2' : combo >= 5 ? 'XP×1.5' : 'いい調子！', combo >= 10 ? 'fever' : '');
+        }, 180);
+      }
+    } else {
+      SFX.wrong();
+      buzz([25, 40, 25]);
+    }
+    if (lucky) fxLucky(lucky);
+    document.body.classList.toggle('fever', combo >= 10 && !calm());
+    renderCombo();
+  }
+  function renderCombo() {
+    document.querySelectorAll('.combo-meter').forEach((el) => {
+      el.hidden = combo < 2;
+      el.classList.toggle('hot', combo >= 5);
+      el.classList.toggle('fever', combo >= 10);
+      el.innerHTML = `<b class="num">${combo}</b>COMBO${comboMult(combo) > 1 ? `<span>XP×${comboMult(combo)}</span>` : ''}`;
+      jolt(el, 'tick');
+    });
+  }
+  /* 判子（読了・合格・満点） */
+  function stampFx(box, text, quiet) {
+    if (!box) return;
+    box.querySelectorAll('.hanko').forEach((x) => x.remove());
+    const h = document.createElement('span');
+    h.className = 'hanko' + (quiet || calm() ? ' static' : '');
+    h.textContent = text;
+    box.appendChild(h);
+    if (quiet) return;
+    SFX.stamp();
+    buzz(40);
+    setTimeout(() => jolt(box, 'thud'), 200);
+  }
+  const starSVG = (on, i) =>
+    `<svg class="star${on ? ' on' : ''}" style="--i:${i}" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6l2.9 6 6.6.8-4.9 4.6 1.3 6.5L12 17.3l-5.9 3.2 1.3-6.5L2.5 9.4l6.6-.8z"/></svg>`;
+  /* 結果画面の星（0〜3）を順番に鳴らす */
+  function starsHTML(n) {
+    return `<div class="stars" role="img" aria-label="星${n}つ">${[0, 1, 2].map((i) => starSVG(i < n, i)).join('')}</div>`;
+  }
+  function playStars(n) {
+    if (calm()) return;
+    for (let i = 0; i < n; i++) setTimeout(() => SFX.star(i), 520 + i * 280);
+  }
+
+  /* 宝箱 */
+  const CHEST = {
+    w: { n: '木の宝箱', gems: [1, 1], xp: [15, 30] },
+    s: { n: '銀の宝箱', gems: [1, 3], xp: [30, 60] },
+    g: { n: '金の宝箱', gems: [3, 6], xp: [80, 150] }
+  };
+  function grantChest(t, why, delay = 0) {
+    S.chests = (S.chests || []).concat({ t, w: why || '' });
+    save();
+    const go = () => {
+      celebrate({ kind: 'chest', tier: t, why: why || '' });
+      flushCelebrations();
+    };
+    if (delay && !calm()) setTimeout(go, delay);
+    else go();
+  }
+  function chestSVG(t) {
+    return `<svg class="chest ch-${t}" viewBox="0 0 120 112" aria-hidden="true">
+      <ellipse cx="60" cy="104" rx="44" ry="6" class="ch-shadow"/>
+      <path class="ch-beam" d="M30 52 L4 -40 H116 L90 52 Z"/>
+      <rect x="14" y="50" width="92" height="48" rx="6" class="ch-body"/>
+      <rect x="28" y="50" width="9" height="48" class="ch-band"/><rect x="83" y="50" width="9" height="48" class="ch-band"/>
+      <rect x="14" y="50" width="92" height="7" class="ch-band"/>
+      <ellipse cx="60" cy="52" rx="40" ry="7" class="ch-glow"/>
+      <g class="ch-lid">
+        <path d="M14 52 V38 Q14 18 60 18 Q106 18 106 38 V52 Z" class="ch-lidbody"/>
+        <path d="M28 52 V23 h9 V52 Z M83 52 V23 h9 V52 Z" class="ch-band"/>
+      </g>
+      <rect x="51" y="46" width="18" height="20" rx="4" class="ch-lock"/><circle cx="60" cy="54" r="2.6" class="ch-key"/><rect x="59" y="55" width="2" height="6" class="ch-key"/>
+    </svg>`;
+  }
+
+  /* お祝い（オーバーレイ） */
   const celebQueue = [];
   let celebShowing = false;
   function celebrate(c) {
     celebQueue.push(c);
   }
+  /* 正解の演出（数字・コンボの文字）が終わってから、お祝いを出す */
+  let fxBusyUntil = 0;
+  let flushTimer = 0;
   function flushCelebrations() {
-    if (!celebShowing && celebQueue.length) showCeleb(celebQueue.shift());
+    if (celebShowing || !celebQueue.length) return;
+    const wait = fxBusyUntil - Date.now();
+    if (wait > 0) {
+      clearTimeout(flushTimer);
+      flushTimer = setTimeout(flushCelebrations, wait);
+      return;
+    }
+    showCeleb(celebQueue.shift());
   }
   const gemSVG = (cls = 'gem') =>
     `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h8l3 4-7 8-7-8z" class="gem-body"/><path d="M1 6.5h14M5.6 6.5 8 14.5l2.4-8M4 2.5l1.6 4L8 2.5l2.4 4L12 2.5" class="gem-cut"/></svg>`;
@@ -608,31 +980,49 @@
         <circle cx="48" cy="50" r="40" class="md-stamp"/><circle cx="48" cy="50" r="33" class="md-stamp-in"/>
         <text x="48" y="60" text-anchor="middle" font-size="26" class="md-stamp-t">達成</text></svg>`;
     }
+    if (c.kind === 'streak') {
+      return `<svg viewBox="0 0 96 100" width="${size}" height="${size}" aria-hidden="true">
+        <path d="M48 4c5 16-8 22-8 34 0 7 5 12 11 12 7 0 11-6 10-14 10 7 17 19 17 32a30 30 0 0 1-60 0C18 44 42 30 48 4z" class="md-flame"/>
+        <path d="M48 44c3 9-5 12-5 19 0 4 3 7 6.5 7 4 0 6.5-3.5 6-8 6 4 9.5 10.5 9.5 17.5a17 17 0 0 1-34 0C31 67 44 58 48 44z" class="md-flame-in"/>
+        <text x="48" y="92" text-anchor="middle" font-size="19" class="md-glyph-s num">${c.n}</text></svg>`;
+    }
     const tier = c.tier || 'b';
     return `<svg viewBox="0 0 96 100" width="${size}" height="${size}" aria-hidden="true">
       <path d="M30 2h14l8 30H38z" class="md-ribbon-a"/><path d="M52 2h14L58 32H44z" class="md-ribbon-b"/>
       <circle cx="48" cy="62" r="33" class="md-${tier}"/><circle cx="48" cy="62" r="26" class="md-${tier}-in"/>
       <text x="48" y="72" text-anchor="middle" font-size="26" class="md-glyph">${esc(c.ic || '賞')}</text></svg>`;
   }
+  function closeCeleb(el) {
+    el.hidden = true;
+    el.innerHTML = '';
+    el.onclick = null;
+    celebShowing = false;
+    setTimeout(settle, 180);
+  }
   function showCeleb(c) {
     celebShowing = true;
     const el = document.getElementById('celebrate');
-    const kindLabel = { ach: `実績メダル（${TIER[c.tier || 'b'].name}）`, medal: '勲章', level: 'レベルアップ', mission: 'デイリーミッション' }[c.kind] || '';
-    el.innerHTML = `<div class="celeb-card" role="dialog" aria-modal="true" aria-label="${esc(c.title)}">
+    if (c.kind === 'chest') return showChest(c, el);
+    const big = c.kind === 'level' || c.kind === 'medal' || c.tier === 'g';
+    const kindLabel = { ach: `実績メダル（${TIER[c.tier || 'b'].name}）`, medal: '勲章', level: 'LEVEL UP', mission: 'デイリーミッション', streak: '連続学習' }[c.kind] || '';
+    el.innerHTML = `<div class="celeb-card${big ? ' big' : ''}" data-kind="${c.kind}" role="dialog" aria-modal="true" aria-label="${esc(c.title)}">
+        <div class="celeb-rays" aria-hidden="true"></div>
         <div class="celeb-badge">${badgeSVG(c)}</div>
         <p class="celeb-kind">${kindLabel}</p>
         <h2 class="celeb-title">${esc(c.title)}</h2>
         <p class="celeb-sub">${esc(c.sub || '')}</p>
-        <p class="celeb-gain">${c.gems ? `${gemSVG()}<b class="num">+${c.gems}</b>` : ''}${c.xp ? `<span class="num">+${c.xp} XP</span>` : ''}</p>
+        <p class="celeb-gain">${c.gems ? `<span class="g">${gemSVG()}<b class="num" data-to="${c.gems}">+${c.gems}</b></span>` : ''}${c.xp ? `<span class="x num">+<b data-to="${c.xp}">${c.xp}</b> XP</span>` : ''}</p>
         <button type="button" class="btn btn-primary" id="celebOk">やった！</button>
       </div>`;
     el.hidden = false;
-    confetti();
+    confetti(big ? 'big' : 'normal');
+    SFX.fanfare(big);
+    buzz(big ? [30, 50, 30, 50, 90] : [20, 40, 40]);
+    el.querySelectorAll('[data-to]').forEach((b, i) => countUp(b, 0, +b.dataset.to, 700, b.closest('.g') ? '+' : '', 450 + i * 200, () => SFX.tick()));
+    /* 出た直後のタップ（次の問題へ進もうとした指など）では閉じない */
+    const t0 = Date.now();
     const close = () => {
-      el.hidden = true;
-      el.innerHTML = '';
-      celebShowing = false;
-      setTimeout(flushCelebrations, 180);
+      if (Date.now() - t0 > 650) closeCeleb(el);
     };
     el.querySelector('#celebOk').addEventListener('click', close);
     el.onclick = (e) => {
@@ -640,56 +1030,147 @@
     };
     el.querySelector('#celebOk').focus({ preventScroll: true });
   }
-  function confetti() {
-    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  function showChest(c, el) {
+    const def = CHEST[c.tier] || CHEST.w;
+    el.innerHTML = `<div class="celeb-card chest-card" data-kind="chest" role="dialog" aria-modal="true" aria-label="${esc(def.n)}">
+        <div class="celeb-rays" aria-hidden="true"></div>
+        <p class="celeb-kind">${c.why ? esc(c.why) + 'のごほうび' : 'ごほうび'}</p>
+        <h2 class="celeb-title">${def.n}</h2>
+        <button type="button" class="chest-btn" id="chestBtn" aria-label="宝箱を開ける">${chestSVG(c.tier)}</button>
+        <p class="celeb-sub" id="chestSub">タップして開ける</p>
+        <p class="celeb-gain" id="chestGain"></p>
+        <button type="button" class="btn btn-primary" id="celebOk" hidden>受け取る</button>
+      </div>`;
+    el.hidden = false;
+    el.onclick = null;
+    const btn = el.querySelector('#chestBtn');
+    const card = el.querySelector('.chest-card');
+    const ok = el.querySelector('#celebOk');
+    SFX.coin();
+    let opened = false;
+    const t0 = Date.now();
+    btn.addEventListener('click', () => {
+      if (opened || Date.now() - t0 < 500) return;
+      opened = true;
+      btn.classList.add('shaking');
+      SFX.shake();
+      buzz([10, 290, 10, 290, 10]);
+      setTimeout(() => {
+        const i = (S.chests || []).findIndex((x) => x.t === c.tier);
+        if (i >= 0) S.chests.splice(i, 1);
+        const jackpot = Math.random() < 0.08;
+        const mul = jackpot ? 3 : 1;
+        const g = randInt(def.gems[0], def.gems[1]) * mul;
+        const x = randInt(def.xp[0], def.xp[1]) * mul;
+        S.gems += g;
+        bump('chests');
+        if (jackpot) bump('jackpot');
+        gainXP(x);
+        pendXP = 0;
+        save();
+        updateLvChip();
+        btn.classList.remove('shaking');
+        btn.classList.add('open');
+        card.classList.add('opened');
+        if (jackpot) card.classList.add('jackpot');
+        SFX.open(jackpot);
+        buzz([20, 30, 70]);
+        confetti(jackpot ? 'big' : 'normal');
+        burst(originPt(btn), { n: 10 + g, html: gemSVG(), dist: 120 });
+        el.querySelector('#chestSub').textContent = jackpot ? '大当たり！ 中身が3倍' : 'おめでとう！';
+        const gain = el.querySelector('#chestGain');
+        gain.innerHTML = `<span class="g">${gemSVG()}<b class="num">+0</b></span><span class="x num">+<b>0</b> XP</span>`;
+        countUp(gain.querySelector('.g b'), 0, g, 600, '+', 150, () => SFX.tick());
+        countUp(gain.querySelector('.x b'), 0, x, 800, '', 300);
+        ok.hidden = false;
+        ok.focus({ preventScroll: true });
+      }, calm() ? 60 : 920);
+    });
+    ok.addEventListener('click', () => closeCeleb(el));
+    btn.focus({ preventScroll: true });
+  }
+  function confetti(mode = 'normal') {
+    if (calm()) return;
     const cv = document.getElementById('confetti');
     if (!cv || !cv.getContext) return;
     const ctx = cv.getContext('2d');
     const W = (cv.width = window.innerWidth);
     const H = (cv.height = window.innerHeight);
     const css = getComputedStyle(document.documentElement);
-    const colors = ['--pol', '--eco', '--eth', '--geo', '--his', '--pen', '--gold'].map((v) => css.getPropertyValue(v).trim() || '#e0560b');
-    const parts = Array.from({ length: 110 }, () => ({
-      x: W / 2 + (Math.random() - 0.5) * 80,
-      y: H * 0.42,
-      vx: (Math.random() - 0.5) * 12,
-      vy: -Math.random() * 12 - 4,
-      r: Math.random() * Math.PI,
-      vr: (Math.random() - 0.5) * 0.3,
-      w: 6 + Math.random() * 6,
-      h: 3 + Math.random() * 4,
-      c: colors[Math.floor(Math.random() * colors.length)]
-    }));
+    const colors = ['--pol', '--eco', '--eth', '--geo', '--his', '--pen', '--gold', '--gem', '--ok'].map((v) => css.getPropertyValue(v).trim() || '#e0560b');
+    const big = mode === 'big';
+    const parts = [];
+    const add = (x, y, a0, a1, v0, v1, n) => {
+      for (let i = 0; i < n; i++) {
+        const a = a0 + Math.random() * (a1 - a0);
+        const v = v0 + Math.random() * (v1 - v0);
+        parts.push({
+          x, y,
+          vx: Math.cos(a) * v,
+          vy: Math.sin(a) * v,
+          r: Math.random() * Math.PI,
+          vr: (Math.random() - 0.5) * 0.4,
+          w: 6 + Math.random() * 7,
+          h: 3 + Math.random() * 5,
+          ph: Math.random() * 6,
+          round: Math.random() < 0.22,
+          c: colors[Math.floor(Math.random() * colors.length)]
+        });
+      }
+    };
+    const kick = Math.sqrt(H / 860);
+    add(W / 2, H * 0.4, 0, Math.PI * 2, 3, 12, big ? 90 : 60);
+    add(-10, H + 10, -1.4, -0.85, 13 * kick, 23 * kick, big ? 80 : 45);
+    add(W + 10, H + 10, -Math.PI + 0.85, -Math.PI + 1.4, 13 * kick, 23 * kick, big ? 80 : 45);
+    const DUR = big ? 3000 : 2400;
     cv.hidden = false;
     const t0 = performance.now();
     (function frame(t) {
       const dt = t - t0;
       ctx.clearRect(0, 0, W, H);
       parts.forEach((p) => {
-        p.vy += 0.35;
-        p.vx *= 0.99;
-        p.x += p.vx;
+        p.vy += 0.3;
+        p.vx *= 0.985;
+        p.vy *= 0.992;
+        p.x += p.vx + Math.sin(dt / 160 + p.ph) * 0.6;
         p.y += p.vy;
         p.r += p.vr;
         ctx.save();
         ctx.translate(p.x, p.y);
         ctx.rotate(p.r);
         ctx.fillStyle = p.c;
-        ctx.globalAlpha = Math.max(0, 1 - dt / 1800);
-        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        ctx.globalAlpha = Math.max(0, Math.min(1, (DUR - dt) / 600));
+        if (p.round) {
+          ctx.beginPath();
+          ctx.arc(0, 0, p.h * 0.8, 0, Math.PI * 2);
+          ctx.fill();
+        } else ctx.fillRect(-p.w / 2, (-p.h / 2) * Math.abs(Math.cos(dt / 120 + p.ph)), p.w, p.h * Math.abs(Math.cos(dt / 120 + p.ph)) + 0.5);
         ctx.restore();
       });
-      if (dt < 1800) requestAnimationFrame(frame);
+      if (dt < DUR) requestAnimationFrame(frame);
       else {
         ctx.clearRect(0, 0, W, H);
         cv.hidden = true;
       }
     })(t0);
   }
+  /* 上バーのレベル・宝石表示 */
+  let chipGems = null;
   function updateLvChip() {
     const el = document.getElementById('lvchip');
-    if (el) el.innerHTML = `<span class="lv">Lv<b class="num">${levelOf(S.xp)}</b></span><span class="gems">${gemSVG()}<b class="num">${S.gems}</b></span>`;
+    if (!el) return;
+    if (!el.querySelector('.lvmini'))
+      el.innerHTML = `<span class="lv">Lv<b class="num"></b></span><span class="lvmini"><i></i></span><span class="gems">${gemSVG()}<b class="num"></b></span>`;
+    const lv = levelOf(S.xp);
+    el.querySelector('.lv b').textContent = lv;
+    el.querySelector('.lvmini i').style.width = pct(S.xp - lvNeed(lv), lvNeed(lv + 1) - lvNeed(lv)) + '%';
+    const g = el.querySelector('.gems b');
+    if (chipGems != null && S.gems > chipGems) countUp(g, chipGems, S.gems, 700, '', 500);
+    else g.textContent = S.gems;
+    chipGems = S.gems;
   }
+
+  const FLAME = '<svg class="flame" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1.5c1.3 4-2 5.6-2 8.6 0 1.6 1.1 2.8 2.6 2.8 1.8 0 2.7-1.5 2.4-3.4 2.6 1.8 4.3 4.8 4.3 7.9A7.3 7.3 0 0 1 12 24a7.3 7.3 0 0 1-7.3-6.6C4.7 11.2 10.4 8.3 12 1.5z"/></svg>';
 
   /* 着せ替え（宝石で交換） */
   const SKINS = [
@@ -697,7 +1178,11 @@
     { id: 'sakura', n: '桜', cost: 15, sw: '#e0447a' },
     { id: 'wakatake', n: '若竹', cost: 15, sw: '#4f9a3f' },
     { id: 'ai', n: '藍', cost: 15, sw: '#3b6fd1' },
-    { id: 'kin', n: '金箔', cost: 30, sw: '#c9961c' }
+    { id: 'kin', n: '金箔', cost: 30, sw: '#c9961c' },
+    { id: 'fuji', n: '藤', cost: 40, sw: '#8a5cc7' },
+    { id: 'hisui', n: '翡翠', cost: 40, sw: '#1f9a8a' },
+    { id: 'beni', n: '紅', cost: 60, sw: '#c8283f' },
+    { id: 'sumi', n: '墨', cost: 60, sw: '#3d4452' }
   ];
 
   /* 一問一答の自己採点 */
@@ -705,9 +1190,14 @@
     const prev = S.qa[u.key];
     S.qa[u.key] = { ok: ok ? 1 : 0, n: ((prev && prev.n) || 0) + 1, t: Date.now() };
     if (!S.read[u.key]) S.read[u.key] = Date.now();
-    if (ok && !(prev && prev.ok)) bump('qaOk');
+    if (ok && !(prev && prev.ok)) {
+      bump('qaOk');
+      if (st('qaOk') % 5 === 0) grantChest('w', '「なぜ？」5問', 900);
+    }
     touchDay();
-    gainXP(ok ? 8 : 2);
+    const lucky = ok ? rollLucky(0.06) : null;
+    gainXP((ok ? 8 : 2) * (lucky === 'xp' ? 3 : 1));
+    if (lucky) fxLucky(lucky);
     progressMission('qa');
     settle();
   }
@@ -882,6 +1372,9 @@
     const parts = decodeURIComponent(location.hash.replace(/^#/, '')).split('.').filter(Boolean);
     const [r = 'home', a, b] = parts;
     keyHandler = null;
+    combo = 0;
+    document.body.classList.remove('fever');
+    document.querySelectorAll('.fx-splash, .fx-float').forEach((x) => x.remove());
     setSheetAvailable(false);
     /* 別コースの科目・講を開いたら、コースもそちらに合わせる */
     if (['learn', 'quiz', 'cards', 'digest'].includes(r) && a && META[a] && ALL_SUBJECTS.includes(a) && courseOf(a) !== curCourse()) {
@@ -999,6 +1492,7 @@
       if (answered) return;
       answered = true;
       const ok = ci === q.a;
+      recordAnswer(q.id, ok);
       wrap.querySelectorAll('.choice').forEach((b) => {
         const c = +b.dataset.ci;
         b.disabled = true;
@@ -1010,12 +1504,18 @@
           b.querySelector('.mark').textContent = 'あなたの答え';
         } else b.classList.add('dim');
       });
+      if (!calm()) {
+        const hit = wrap.querySelector(`.choice[data-ci="${ok ? q.a : ci}"]`);
+        if (hit) {
+          hit.classList.add(ok ? 'pop' : 'shake');
+          if (ok) burst(originPt(hit.querySelector('.ck')), { n: 12, color: 'var(--ok)', dist: 44 });
+        }
+      }
       const ex = wrap.querySelector('.explain');
       ex.hidden = false;
-      ex.innerHTML = `<div class="verdict ${ok ? 'ok' : 'ng'}">${icon(ok ? 'check' : 'x')}${ok ? '正解' : '不正解'}</div>
+      ex.innerHTML = `<div class="verdict ${ok ? 'ok' : 'ng'}">${icon(ok ? 'check' : 'x')}${ok ? '正解！' : '不正解'}${ok && combo >= 2 ? `<span class="verdict-combo num">${combo}連続</span>` : ''}</div>
         ${q.e ? `<div>${inline(q.e)}</div>` : ''}
         ${opts.link !== false && q.unit ? `<a href="#learn.${q.unit.key}">第${q.unit.no}講「${esc(q.unit.title)}」を読む</a>` : ''}`;
-      recordAnswer(q.id, ok);
       if (opts.onAnswer) opts.onAnswer(ok);
     }
     wrap.addEventListener('click', (e) => {
@@ -1133,7 +1633,7 @@
           isQA ? `「なぜ？」に自分の言葉で答える練習を全${total}問。答えを考えてから、めくって確かめます。` : `知っておきたい基礎を全${total}講にまとめたノートです。オレンジの語句は、赤シートで隠して覚えられます。`
         }</p>
         <div class="stats">
-          <div class="stat"><b>${stk}<small>日</small></b><span>連続学習</span></div>
+          <div class="stat${stk ? ' on-fire' : ''}"><b>${stk ? FLAME : ''}${stk}<small>日</small></b><span>連続学習</span></div>
           <div class="stat"><b>${done}<small>/${total}</small></b><span>${isQA ? '答えた問い' : '読了した講'}</span></div>
           <a class="stat stat-link" href="#awards"><b>Lv${lv}</b><span class="bar lvbar"><i style="width:${lvPct}%"></i></span><span>${titleOf(lv)}・${gemSVG()}${S.gems}</span></a>
         </div>
@@ -1351,7 +1851,7 @@
           : ''
       }
 
-      <div class="card done-box">
+      <div class="card done-box">${S.read[u.key] ? '<span class="hanko static">読了</span>' : ''}
         <p id="doneMsg">${S.read[u.key] ? (S.rev[u.key] ? (S.rev[u.key].s >= 5 ? '定着済み。' : '') + `次の復習は ${fmtDate(S.rev[u.key].d)} ごろです。` : 'この講は読了済みです。') : '読み終えたら記録しておきましょう。'}</p>
         <button type="button" class="btn btn-sm ${S.read[u.key] ? '' : 'btn-subject'}" id="doneBtn">${S.read[u.key] ? '未読に戻す' : '読了にする'}</button>
       </div>
@@ -1401,12 +1901,18 @@
         delete S.rev[u.key];
       }
       touchDay();
+      let first = false;
       if (on && !S.once[u.key]) {
         S.once[u.key] = 1;
         gainXP(30);
         progressMission('read');
+        first = true;
       }
       settle();
+      const box = view.querySelector('.done-box');
+      if (on) stampFx(box, '読了');
+      else box.querySelectorAll('.hanko').forEach((x) => x.remove());
+      if (first) grantChest('s', '読了', 1100);
       doneBtn.textContent = on ? '未読に戻す' : '読了にする';
       doneBtn.classList.toggle('btn-subject', !on);
       view.querySelector('#doneMsg').textContent = on ? `読了済み。次の復習は ${fmtDate(S.rev[u.key].d)} ごろです。` : '読み終えたら記録しておきましょう。';
@@ -1414,7 +1920,7 @@
     doneBtn.addEventListener('click', () => {
       const on = !S.read[u.key];
       markRead(on);
-      if (on) toast(next ? `読了！次は「${next.title}」` : `${m.name}を最後まで読みました`);
+      if (on) setTimeout(() => toast(next ? `読了！次は「${next.title}」` : `${m.name}を最後まで読みました`), 500);
     });
     return u.title;
   }
@@ -1616,10 +2122,13 @@
   function runQuiz(questions, label, unit) {
     let idx = 0;
     const results = [];
-    let combo = 0;
+    const xp0 = S.xp;
+    let best = 0;
+    combo = 0;
+    document.body.classList.remove('fever');
     view.innerHTML = `<div class="page">
       <nav class="crumbs"><a href="#practice">演習</a><span aria-hidden="true">›</span><a href="#quiz">4択クイズ</a><span aria-hidden="true">›</span><span>${esc(label)}</span></nav>
-      <div class="progress-line"><i id="qProg" style="width:0%"></i></div>
+      <div class="quiz-top"><div class="progress-line"><i id="qProg" style="width:0%"></i></div><span class="combo-meter" hidden></span></div>
       <div id="qStage"></div>
       <div class="qfoot"><span class="hint kbd-hint">キーボード：1〜4で解答、Enterで次へ</span><button type="button" class="btn btn-primary" id="qNext" hidden>次へ</button></div>
     </div>`;
@@ -1637,10 +2146,8 @@
         label: `${idx + 1} / ${questions.length}`,
         onAnswer: (ok) => {
           results.push({ q, ok });
-          combo = ok ? combo + 1 : 0;
-          if (combo > st('bestCombo')) S.st.bestCombo = combo;
-          if (combo >= 3 && (combo === 3 || combo % 5 === 0)) toast(`${combo}問連続正解！`);
-          settle();
+          best = Math.max(best, combo);
+          prog.style.width = pct(idx + 1, questions.length) + '%';
           next.hidden = false;
           next.textContent = idx + 1 < questions.length ? '次へ' : '結果を見る';
           next.focus({ preventScroll: true });
@@ -1651,19 +2158,20 @@
     function finish() {
       keyHandler = null;
       const ok = results.filter((r) => r.ok).length;
-      if (results.length >= 10 && ok === results.length) {
-        bump('perfect');
-        settle();
-      }
+      const perfect = results.length >= 10 && ok === results.length;
       const p = pct(ok, results.length);
+      const stars = p === 100 ? 3 : p >= 80 ? 2 : p >= 50 ? 1 : 0;
       const msg = p === 100 ? '満点。お見事です。' : p >= 80 ? 'かなり身についています。' : p >= 50 ? 'あと一歩。間違えた所だけ見直しましょう。' : '読み直してから、もう一度。';
       const wrong = results.filter((r) => !r.ok);
       view.querySelector('.qfoot').remove();
       prog.style.width = '100%';
-      stage.innerHTML = `<div class="card result">
+      document.body.classList.remove('fever');
+      stage.innerHTML = `<div class="card result${p === 100 ? ' perfect' : ''}">
           <p class="eyebrow">RESULT</p>
-          <div class="result-score">${ok}<small> / ${results.length}</small></div>
+          ${starsHTML(stars)}
+          <div class="result-score"><span id="scoreN">${ok}</span><small> / ${results.length}</small></div>
           <p class="result-msg">${msg}</p>
+          <div class="result-stats"><span>最大コンボ <b class="num">${best}</b></span><span>獲得 <b class="num">+${S.xp - xp0}</b> XP</span></div>
           <div class="btn-row" style="justify-content:center">
             ${wrong.length ? '<button type="button" class="btn btn-primary" id="retryWrong">間違えた問題だけもう一度</button>' : ''}
             <a class="btn" href="${unit ? '#learn.' + unit.key : '#quiz'}">${unit ? '講に戻る' : '条件を変える'}</a>
@@ -1685,6 +2193,15 @@
                 .join('')}</div></section>`
             : ''
         }`;
+      countUp(stage.querySelector('#scoreN'), 0, ok, 500, '', 100, () => SFX.tick());
+      playStars(stars);
+      if (p === 100) setTimeout(() => stampFx(stage.querySelector('.result'), '満点'), 1400);
+      if (results.length >= 5 || perfect)
+        setTimeout(() => {
+          if (perfect) bump('perfect');
+          grantChest(p === 100 ? 'g' : p >= 80 ? 's' : 'w', '4択クイズ');
+          settle();
+        }, calm() ? 100 : p === 100 ? 2100 : 1500);
       const rb = stage.querySelector('#retryWrong');
       if (rb)
         rb.addEventListener('click', () => {
@@ -1856,42 +2373,72 @@
           <button type="button" class="btn btn-ok" id="fcYes">${icon('check')}${it.qa ? '言えた' : '覚えた'}<span class="kbd-hint">（→）</span></button>
         </div>`;
       const fc = stage.querySelector('#fc');
-      fc.addEventListener('click', () => fc.classList.toggle('flipped'));
+      fc.addEventListener('click', flip);
       stage.querySelector('#fcNo').addEventListener('click', () => grade(false));
       stage.querySelector('#fcYes').addEventListener('click', () => grade(true));
+      busy = false;
+    }
+    let busy = false;
+    function flip() {
+      const fc = document.getElementById('fc');
+      if (!fc) return;
+      fc.classList.toggle('flipped');
+      SFX.flip();
     }
     function grade(ok) {
+      if (busy || !queue.length) return;
+      busy = true;
       const it = queue.shift();
+      const btn = stage.querySelector(ok ? '#fcYes' : '#fcNo');
+      if (btn) lastPt = Object.assign(originPt(btn), { t: Date.now() });
       gradeCard(it.key, ok);
       if (it.qa) gradeQA(it.qa, ok);
       if (!retried.has(it.key)) seen++;
-      if (ok) known++;
-      else if (!retried.has(it.key)) {
+      if (ok) {
+        known++;
+        firstTry += retried.has(it.key) ? 0 : 1;
+      } else if (!retried.has(it.key)) {
         retried.add(it.key);
         queue.push(it);
       }
-      show();
+      if (ok) {
+        SFX.known();
+        buzz(10);
+      } else SFX.later();
+      const fcs = stage.querySelector('.fc-stage');
+      if (fcs && !calm()) {
+        fcs.classList.add(ok ? 'out-ok' : 'out-ng');
+        setTimeout(show, 230);
+      } else show();
     }
+    let firstTry = 0;
     function finish() {
       keyHandler = null;
       prog.style.width = '100%';
+      const rate = seen ? firstTry / seen : 0;
+      const stars = rate >= 0.95 ? 3 : rate >= 0.75 ? 2 : rate >= 0.4 ? 1 : 0;
       stage.innerHTML = `<div class="card result">
         <p class="eyebrow">DONE</p>
-        <div class="result-score">${total}<small> 枚</small></div>
+        ${starsHTML(stars)}
+        <div class="result-score"><span id="cardN">${total}</span><small> 枚</small></div>
         <p class="result-msg">おつかれさまでした。</p>
+        <div class="result-stats"><span>一発で${kind === 'qa' ? '言えた' : '覚えた'} <b class="num">${firstTry}</b></span><span>${kind === 'qa' ? '言えなかった' : 'まだ'} <b class="num">${retried.size}</b></span></div>
         <p class="hint">「まだ」にしたカードは、この回の最後にもう一度出しました。次回以降も優先して出てきます。</p>
         <div class="btn-row" style="justify-content:center">
           <a class="btn btn-primary" href="#cards${kind === 'people' ? '.people' : ''}">続けてめくる</a>
           <a class="btn btn-ghost" href="#practice">演習トップ</a>
         </div>
       </div>`;
+      countUp(stage.querySelector('#cardN'), 0, total, 500, '', 100, () => SFX.tick());
+      playStars(stars);
+      if (total >= 10) setTimeout(() => grantChest(rate >= 0.75 ? 's' : 'w', kind === 'qa' ? '答える練習' : kind === 'people' ? '人物カード' : '暗記カード'), calm() ? 100 : 1500);
     }
     keyHandler = (e) => {
       const fc = document.getElementById('fc');
       if (!fc) return;
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
-        fc.classList.toggle('flipped');
+        flip();
       } else if (e.key === 'ArrowRight') grade(true);
       else if (e.key === 'ArrowLeft') grade(false);
     };
@@ -1910,10 +2457,11 @@
     const ROUNDS = 10;
     let round = 0;
     let score = 0;
+    combo = 0;
     view.innerHTML = `<div class="page">
       <nav class="crumbs"><a href="#practice">演習</a><span aria-hidden="true">›</span><span>どっちが先？</span></nav>
       <header class="lesson-head"><h1 class="lesson-title">どっちが先？</h1><p class="lesson-lead">先に起きた出来事をタップ。全${ROUNDS}問。</p></header>
-      <div class="progress-line"><i id="oProg" style="width:0%"></i></div>
+      <div class="quiz-top"><div class="progress-line"><i id="oProg" style="width:0%"></i></div><span class="combo-meter" hidden></span></div>
       <div id="oStage"></div>
     </div>`;
     const stage = view.querySelector('#oStage');
@@ -1957,7 +2505,12 @@
             if (+c.dataset.i === first) c.classList.add('correct');
             else if (c === b) c.classList.add('wrong');
           });
-          stage.querySelector('#oMsg').textContent = ok ? '正解' : '残念';
+          stage.querySelector('#oMsg').textContent = ok ? '正解！' : '残念';
+          if (!calm()) {
+            const hit = stage.querySelector(`.order-choice[data-i="${ok ? first : i}"]`);
+            if (hit) hit.classList.add(ok ? 'pop' : 'shake');
+            if (ok) burst(originPt(b), { n: 12, color: 'var(--ok)', dist: 50 });
+          }
           const nb = stage.querySelector('#oNext');
           nb.hidden = false;
           nb.focus({ preventScroll: true });
@@ -1966,25 +2519,33 @@
             show();
           });
           touchDay();
-          save();
+          combo = ok ? combo + 1 : 0;
+          if (ok) gainXP(3);
+          fxAnswer(ok, null);
+          settle();
         })
       );
     }
     function finish() {
       prog.style.width = '100%';
       S.st.orderBest = Math.max(st('orderBest'), score);
-      gainXP(score * 3);
       progressMission('order');
       settle();
-      stage.innerHTML = `<div class="card result">
+      const stars = score >= 10 ? 3 : score >= 8 ? 2 : score >= 5 ? 1 : 0;
+      stage.innerHTML = `<div class="card result${score >= 10 ? ' perfect' : ''}">
         <p class="eyebrow">RESULT</p>
+        ${starsHTML(stars)}
         <div class="result-score">${score}<small> / ${ROUNDS}</small></div>
         <p class="result-msg">${score >= 9 ? '時代感覚ばっちり。' : score >= 6 ? 'なかなか。年表で前後を確かめましょう。' : '年表をざっと眺めてから再挑戦。'}</p>
         <div class="btn-row" style="justify-content:center"><button type="button" class="btn btn-primary" id="oAgain">もう一回</button><a class="btn" href="#timeline">年表を見る</a></div>
       </div>`;
+      playStars(stars);
+      grantChest(score >= 10 ? 'g' : score >= 8 ? 's' : 'w', 'どっちが先？', 1500);
       stage.querySelector('#oAgain').addEventListener('click', () => {
         round = 0;
         score = 0;
+        combo = 0;
+        renderCombo();
         show();
       });
     }
@@ -2056,8 +2617,13 @@
     const grade = (ok) => {
       gradeQA(u, ok);
       gradeCard('z:' + u.key, ok);
+      if (ok) {
+        SFX.correct(1);
+        buzz(12);
+        burst(originPt(view.querySelector('#qaOk')), { n: 12, color: 'var(--ok)', dist: 50 });
+      } else SFX.later();
       toast(ok ? 'いいね！ 記録しました' : '次は言えるように。あとでまた出します');
-      if (next) setTimeout(() => (location.hash = '#learn.' + next.key), 650);
+      if (next) setTimeout(() => (location.hash = '#learn.' + next.key), 900);
     };
     view.querySelector('#qaOk').addEventListener('click', () => grade(true));
     view.querySelector('#qaNg').addEventListener('click', () => grade(false));
@@ -2148,6 +2714,9 @@
         </div>
       </div>`;
       view.querySelector('#revResult').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const card = view.querySelector('#revResult .result');
+      if (pass) setTimeout(() => stampFx(card, r.s >= 5 ? '定着' : '合格'), calm() ? 0 : 700);
+      grantChest(pass ? (r.s >= 5 ? 'g' : 's') : 'w', '講の復習', 1700);
     }
     return `復習：${u.title}`;
   }
@@ -2583,6 +3152,10 @@
           ${segHTML('theme', [['system', '自動'], ['light', 'ライト'], ['dark', 'ダーク']], S.theme)}</div>
         <div class="set-row"><div><div class="lbl">文字の大きさ</div></div>
           ${segHTML('size', [['s', '小'], ['m', '標準'], ['l', '大']], S.size)}</div>
+        <div class="set-row"><div><div class="lbl">効果音</div><div class="sub">正解音・ファンファーレ・宝箱の音</div></div>
+          ${segHTML('sfx', [['on', 'オン'], ['off', 'オフ']], S.sfx ? 'on' : 'off')}</div>
+        <div class="set-row"><div><div class="lbl">演出</div><div class="sub">「控えめ」は紙吹雪・飛び出す数字・振動をおさえます</div></div>
+          ${segHTML('fx', [['full', '派手'], ['calm', '控えめ']], S.fx === 'calm' ? 'calm' : 'full')}</div>
       </div>
 
       <section class="section">
@@ -2629,6 +3202,19 @@
       save();
       applyTheme();
     });
+    bindSeg(view, 'sfx', (v) => {
+      S.sfx = v === 'on';
+      save();
+      if (S.sfx) SFX.fanfare(false);
+    });
+    bindSeg(view, 'fx', (v) => {
+      S.fx = v;
+      save();
+      if (v === 'full') {
+        confetti();
+        splash('3<small>COMBO</small>', 'こんな感じになります');
+      }
+    });
     const exp = view.querySelector('#exportBox');
     const payload = JSON.stringify({ app: 'otona-shakai', v: 1, read: S.read, q: S.q, cards: S.cards, days: S.days });
     exp.value = payload;
@@ -2663,7 +3249,7 @@
     view.querySelector('#resetBtn').addEventListener('click', () => (conf.hidden = false));
     view.querySelector('#resetNo').addEventListener('click', () => (conf.hidden = true));
     view.querySelector('#resetYes').addEventListener('click', () => {
-      const keep = { theme: S.theme, size: S.size };
+      const keep = { theme: S.theme, size: S.size, sfx: S.sfx, fx: S.fx };
       S = Object.assign(DEFAULTS(), keep);
       save();
       toast('記録を消去しました');
@@ -2700,6 +3286,8 @@
     celebQueue.length = 0;
     celebrate({ kind: 'ach', tier: 'g', ic: '賞', title: `ごほうびが ${n} 個届きました`, sub: 'これまでの学習ぶんの実績メダル・勲章などをまとめて受け取りました', gems: g });
   }
+  /* 開けずに閉じた宝箱は、次に開いたときに出す */
+  (S.chests || []).forEach((c) => celebrate({ kind: 'chest', tier: c.t, why: c.w }));
   settle();
 
   if (!window.LEARN_STANDALONE && 'serviceWorker' in navigator && /^https:$|^http:$/.test(location.protocol) && !/claude/.test(location.hostname)) {
